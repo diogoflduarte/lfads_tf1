@@ -24,7 +24,7 @@ from simpleModelNoInputs import SimpleModel
 #data_fn = 'chaotic_rnn_inputs_g1p5_dataset_N50_S50'
 #data_fn = 'chaotic_rnn_inputs_g1p5_dataset'
 
-data_dir = '/home/cpandar/th/lf2/lorenz/' # lorenz data
+data_dir = '/tmp/lorenz/' # lorenz data
 #data_fn = 'generated_data'
 data_fn = 'generated'
 datasets = read_datasets(data_dir, data_fn)
