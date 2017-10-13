@@ -10,9 +10,6 @@ def kind_dict(kind):
         'posterior_mean': 3
         }[kind]
 
-        
-
-
 
 def init_linear_transform(in_size, out_size, name=None):
     # initialze with a random distribuion
