@@ -53,7 +53,7 @@ class LFADS(object):
             self.ics_posterior = DiagonalGaussianFromInput(x = self.ic_enc_rnn_obj.last_tot,
                                         z_size = hps['ic_dim'],
                                         name = 'ic_enc_2_ics',
-                                        var_min = hps['ic_var_min'],
+                                        var_min = hps['ic_post_var_min'],
                                         )
 
         # to go forward, either sample from the posterior, or take mean
@@ -133,7 +133,7 @@ class LFADS(object):
                                     hps['factors_dim'],
                                     hps['con_fac_in_dim'],
                                     hps['batch_size'],
-                                    var_min = hps['co_var_min'],
+                                    var_min = hps['co_post_var_min'],
                                     kind = self.run_type)
 
             # construct the actual RNN
@@ -164,8 +164,8 @@ class LFADS(object):
 
         ## calculate the KL cost
         # build a prior distribution to compare to
-        self.ics_prior = DiagonalGaussian(z_size = [hps['batch_size'], hps['ic_dim']], name='ics_prior', var = hps['ic_var_min'])
-        self.cos_prior = DiagonalGaussian(z_size = [hps['batch_size'], hps['num_steps'], hps['co_dim']], name='cos_prior', var = hps['co_var_min'])
+        self.ics_prior = DiagonalGaussian(z_size = [hps['batch_size'], hps['ic_dim']], name='ics_prior', var = hps['ic_prior_var'])
+        self.cos_prior = DiagonalGaussian(z_size = [hps['batch_size'], hps['num_steps'], hps['co_dim']], name='cos_prior', var = hps['co_prior_var'])
         self.cos_posterior = DiagonalGaussianFromExisting(self.co_mean_states, \
                                                           self.co_logvar_states)
 
@@ -184,7 +184,8 @@ class LFADS(object):
         # total KL cost
         self.kl_cost_g0 = tf.reduce_mean(self.kl_cost_g0_b)
         self.kl_cost_co = tf.reduce_mean( tf.reduce_mean(self.kl_cost_co_b, [1]) )
-        self.kl_cost = self.kl_cost_g0 + self.kl_cost_co
+        self.kl_cost = self.kl_cost_g0 * self.kl_ic_weight +\
+                       self.kl_cost_co * self.kl_co_weight
 
         ## calculate reconstruction cost
         self.loglikelihood_b_t = Poisson(self.logrates).logp(self.input_data)

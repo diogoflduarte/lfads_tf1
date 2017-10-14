@@ -83,8 +83,10 @@ hps['co_dim'] = 1
 
 # hps
 hps['keep_prob']=0.95
-hps['ic_var_min']=0.1
-hps['co_var_min']=0.2
+hps['ic_prior_var']=0.1
+hps['ic_post_var_min']=0.0001
+hps['co_prior_var']=0.1
+hps['co_post_var_min']=0.0001
 hps['kind'] = 'train'
 hps['max_grad_norm'] = 200.0
 hps['learning_rate_init'] = 0.05

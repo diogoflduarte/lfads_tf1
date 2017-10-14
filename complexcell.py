@@ -17,6 +17,7 @@ class ComplexCell(tf.nn.rnn_cell.RNNCell):
     def __init__(self, num_units_con, num_units_gen,
                  co_dim, factors_dim, fac_2_con_dim,
                  batch_size, var_min = 0.0,
+                 clip_value = None
                  state_is_tuple=False, reuse=None, kind=None):
         super(ComplexCell, self).__init__(_reuse=reuse)
         
@@ -30,6 +31,7 @@ class ComplexCell(tf.nn.rnn_cell.RNNCell):
         self._batch_size = batch_size
         self._var_min = var_min
         self._kind = kind
+        self._clip_value = clip_value
 
         # note that there are 2x co_dim
         # because it has mean and logvar params
@@ -126,6 +128,11 @@ class ComplexCell(tf.nn.rnn_cell.RNNCell):
 
             values = [con_new_h, gen_new_h, co_mean_new_h, co_logvar_new_h, fac_new_h]
             new_h = tf.concat(axis=1, values=values)
+
+            # add a clip to prevent crazy gradients / nan-ing out
+            if self._clip_value is not None:
+                new_h = tf.clip_by_value(new_h, -self._clip_value, self._clip_value)
+            
         return new_h, new_h
 
 
