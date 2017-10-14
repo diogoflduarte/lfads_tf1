@@ -36,7 +36,7 @@ def linear(x, out_size, name):
 
 
 def ListOfRandomBatches(num_trials, batch_size):
-    assert num_trials > batch_size, "Your batch size is bigger than num_trials..."
+    assert num_trials >= batch_size, "Your batch size is bigger than num_trials..."
     random_order = np.random.permutation(range(num_trials))
     batches = [random_order[i:i+batch_size] for i in range(0, len(random_order), batch_size)]
     return batches
@@ -102,13 +102,14 @@ def makeInitialState(state_dim, batch_size, name):
 
 
 class BidirectionalDynamicRNN(object):
-    def __init__(self, state_dim, inputs, sequence_lengths, batch_size, name, initial_state=None, rnn_type='gru', output_size=None, output_keep_prob=1.0, input_keep_prob=1.0):
+    def __init__(self, state_dim, inputs, sequence_lengths, batch_size, name,
+                 cell, initial_state=None, rnn_type='gru', output_size=None,
+                 output_keep_prob=1.0, input_keep_prob=1.0):
 
         if initial_state is None:
             # need initial states for fw and bw
             self.init_stddev = 1/np.sqrt(float(state_dim))
             self.init_initter = tf.random_normal_initializer(0.0, self.init_stddev, dtype=tf.float32)
-
         
             self.init_h_fw = tf.get_variable(name+'_init_h_fw', [1, state_dim],
                                          initializer=self.init_initter,
@@ -151,15 +152,12 @@ class BidirectionalDynamicRNN(object):
             self.init_fw, self.init_bw = initial_state
 
         #pick your cell
-        if rnn_type.lower() is 'lstm':
-            self.cell = tf.nn.rnn_cell.LSTMCell(num_units = state_dim,
-                                                state_is_tuple=True)
-        else:
-            self.cell = tf.nn.rnn_cell.GRUCell(num_units = state_dim)
+        self.cell = cell
 
         # add dropout if requested
         if output_keep_prob != 1.0:
-            self.cell = tf.contrib.rnn.DropoutWrapper(self.cell, output_keep_prob=output_keep_prob)
+            self.cell = tf.contrib.rnn.DropoutWrapper(
+                self.cell, output_keep_prob=output_keep_prob)
             
         # unused
         # convenient way to take a low-D output from network
@@ -178,7 +176,9 @@ class BidirectionalDynamicRNN(object):
 
         # concatenate the outputs of the encoders (h only) into one vector
         self.last_fw, self.last_bw = self.last
-        
+
+        self.cell = cell
+
         if rnn_type.lower() is 'lstm':
             self.last_tot = tf.concat(axis=1, values=[self.last_fw.h, self.last_bw.h])
         else:
@@ -187,7 +187,10 @@ class BidirectionalDynamicRNN(object):
 
 
 class DynamicRNN(object):
-    def __init__(self, state_dim, inputs, sequence_lengths, batch_size, name, initial_state=None, rnn_type='gru', output_size=None, output_size2=None, output_keep_prob=1.0, input_keep_prob=1.0):
+    def __init__(self, state_dim, inputs, sequence_lengths, batch_size, name,
+                 cell, initial_state=None, rnn_type='gru',
+                 output_size=None, output_size2=None, output_keep_prob=1.0,
+                 input_keep_prob=1.0):
         if initial_state is None:
             # need initial states for fw and bw
             self.init_stddev = 1/np.sqrt(float(state_dim))
@@ -229,7 +232,8 @@ class DynamicRNN(object):
 
         # add dropout if requested
         if output_keep_prob != 1.0:
-            self.cell = tf.contrib.rnn.DropoutWrapper(self.cell, output_keep_prob=output_keep_prob)
+            self.cell = tf.contrib.rnn.DropoutWrapper(
+                self.cell, output_keep_prob=output_keep_prob)
 
         # unused
         # convenient way to take a low-D output from network

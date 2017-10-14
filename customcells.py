@@ -3,21 +3,65 @@ import tensorflow as tf
 from tensorflow.python.ops import rnn_cell_impl
 import os
 
+from helper_funcs import linear, kind_dict
 from helper_funcs import DiagonalGaussianFromExisting
 
 import collections
 import hashlib
 import numbers
 
-from helper_funcs import linear, kind_dict
 
+
+class CustomGRUCell(tf.nn.rnn_cell.RNNCell):
+    def __init__(self, num_units, batch_size,
+                 clip_value = None,
+                 state_is_tuple = False,
+                 reuse = None):
+        super(CustomGRUCell, self).__init__(_reuse=reuse)
+        self._num_units = num_units
+        self._state_is_tuple = state_is_tuple
+        self._batch_size = batch_size
+        self._clip_value = clip_value
+
+        self._output_size = self._num_units
+        self._state_size = self._num_units
+
+    @property
+    def state_size(self):
+        return self._state_size
+
+    @property
+    def output_size(self):
+        return self._output_size
+        
+
+    def __call__(self, inputs, state, scope=None):
+        name = type(self).__name__
+        # inputs and state better be a 4-tuple
+        with tf.variable_scope(scope or type(self).__name__):
+
+            with tf.variable_scope("Gates"):
+                ru = linear(tf.concat(axis=1, values=[inputs, state]),
+                                2 * self._num_units, name='ru_linear')
+                ru = tf.nn.sigmoid(ru)
+                r, u = tf.split( ru, 2, axis=1)
+
+            with tf.variable_scope("Candidate"):
+                c = tf.nn.tanh( _linear([inputs, r * state],
+                                                          self._num_units, True))
+            new_h = u*state + (1 - u) * c
+
+            # clip if requested
+            if self._clip_value is not None:
+                new_h = tf.clip_by_value(new_h, -self._clip_value, self._clip_value)
+            return new_h, new_h            
 
 class ComplexCell(tf.nn.rnn_cell.RNNCell):
 
     def __init__(self, num_units_con, num_units_gen,
                  co_dim, factors_dim, fac_2_con_dim,
                  batch_size, var_min = 0.0,
-                 clip_value = None
+                 clip_value = None,
                  state_is_tuple=False, reuse=None, kind=None):
         super(ComplexCell, self).__init__(_reuse=reuse)
         
@@ -98,7 +142,8 @@ class ComplexCell(tf.nn.rnn_cell.RNNCell):
                 if self._var_min > 0.0:
                     co_logvar_new_h = tf.log(tf.exp(co_logvar_new_h) + self._var_min)
 
-                cos_posterior = DiagonalGaussianFromExisting(co_mean_new_h, co_logvar_new_h)
+                cos_posterior = DiagonalGaussianFromExisting(
+                    co_mean_new_h, co_logvar_new_h)
                 
                 # normally sample, but sometimes use the mean
                 if self._kind in [kind_dict("train"), kind_dict("posterior_sample_and_average")]:

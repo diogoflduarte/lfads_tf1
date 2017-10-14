@@ -13,6 +13,8 @@ from helper_funcs import KLCost_GaussianGaussian, Poisson
 from plot_funcs import plot_data, close_all_plots
 from data_funcs import read_datasets
 from customcells import ComplexCell
+from customcells import CustomGRUCell
+
 
 
 
@@ -40,14 +42,19 @@ class LFADS(object):
             self.run_type = tf.placeholder(tf.int16, name='run_type')
 
         with tf.variable_scope('ic_enc'):
+            ic_enc_cell = CustomGRUCell(num_units = hps['ic_enc_dim'],\
+                                        batch_size = hps['batch_size'],
+                                        clip_value = hps['cell_clip_value'])
             ## ic_encoder
-            self.ic_enc_rnn_obj = BidirectionalDynamicRNN(state_dim = hps['ic_enc_dim'],
-                                                 inputs = self.input_data,
-                                                 sequence_lengths = self.sequence_lengths,
-                                                 batch_size = hps['batch_size'],
-                                                 name = 'ic_enc',
-                                                 rnn_type = 'gru',
-                                                 output_keep_prob = self.keep_prob)
+            self.ic_enc_rnn_obj = BidirectionalDynamicRNN(
+                state_dim = hps['ic_enc_dim'],
+                inputs = self.input_data,
+                sequence_lengths = self.sequence_lengths,
+                batch_size = hps['batch_size'],
+                name = 'ic_enc',
+                cell = ic_enc_cell,
+                rnn_type = 'customgru',
+                output_keep_prob = self.keep_prob)
 
             # map the ic_encoder onto the actual ic layer
             self.ics_posterior = DiagonalGaussianFromInput(x = self.ic_enc_rnn_obj.last_tot,
@@ -71,27 +78,38 @@ class LFADS(object):
         # if not, skip all these graph elements like so:
         if hps['co_dim'] !=0:
             with tf.variable_scope('ci_enc'):
+
+                ci_enc_cell = CustomGRUCell(num_units = hps['ci_enc_dim'],\
+                                            batch_size = hps['batch_size'],
+                                            clip_value = hps['cell_clip_value'])
                 ## ci_encoder
-                self.ci_enc_rnn_obj = BidirectionalDynamicRNN(state_dim = hps['ci_enc_dim'],
-                                                 inputs = self.input_data,
-                                                 sequence_lengths = self.sequence_lengths,
-                                                 batch_size = hps['batch_size'],
-                                                 name = 'ci_enc',
-                                                 rnn_type = 'gru',
-                                                 output_keep_prob = self.keep_prob)
+                self.ci_enc_rnn_obj = BidirectionalDynamicRNN(
+                    state_dim = hps['ci_enc_dim'],
+                    inputs = self.input_data,
+                    sequence_lengths = self.sequence_lengths,
+                    batch_size = hps['batch_size'],
+                    name = 'ci_enc',
+                    cell = ci_enc_cell,
+                    rnn_type = 'customgru',
+                    output_keep_prob = self.keep_prob)
                 # states from bidirec RNN come out as a tuple. concatenate those:
-                self.ci_enc_rnn_states = tf.concat(self.ci_enc_rnn_obj.states,
-                                                   axis=2, name='ci_enc_rnn_states')
+                if not hps['do_causal_controller']:
+                    self.ci_enc_rnn_states = tf.concat(self.ci_enc_rnn_obj.states,
+                                                       axis=2, name='ci_enc_rnn_states')
+                else:
+                    # if causal controller, only use the fwd rnn
+                    [self.ci_enc_rnn_states, _]  = self.ci_enc_rnn_obj.states
 
                 ## take a linear transform of the ci_enc output
                 #    this is to lower the dimensionality of the ci_enc
                 with tf.variable_scope('ci_enc_2_co_in'):
                     # one input from the encoder, another will come back from factors
-                    self.ci_enc_object = LinearTimeVarying(inputs=self.ci_enc_rnn_states,
-                                                           output_size = hps['con_ci_enc_in_dim'],
-                                                           transform_name = 'ci_enc_2_co_in',
-                                                           output_name = 'ci_enc_output_concat',
-                                                           nonlinearity = None)
+                    self.ci_enc_object = LinearTimeVarying(
+                        inputs=self.ci_enc_rnn_states,
+                        output_size = hps['con_ci_enc_in_dim'],
+                        transform_name = 'ci_enc_2_co_in',
+                        output_name = 'ci_enc_output_concat',
+                        nonlinearity = None)
                     self.ci_enc_outputs = self.ci_enc_object.output
 
         ## the controller, controller outputs, generator, and factors are implemented
@@ -128,13 +146,13 @@ class LFADS(object):
 
             # construct the complexcell
             self.complexcell=ComplexCell(hps['con_dim'],
-                                    hps['gen_dim'],
-                                    hps['co_dim'],
-                                    hps['factors_dim'],
-                                    hps['con_fac_in_dim'],
-                                    hps['batch_size'],
-                                    var_min = hps['co_post_var_min'],
-                                    kind = self.run_type)
+                                         hps['gen_dim'],
+                                         hps['co_dim'],
+                                         hps['factors_dim'],
+                                         hps['con_fac_in_dim'],
+                                         hps['batch_size'],
+                                         var_min = hps['co_post_var_min'],
+                                         kind = self.run_type)
 
             # construct the actual RNN
             #   its inputs are the output of the controller_input_enc
@@ -164,18 +182,15 @@ class LFADS(object):
 
         ## calculate the KL cost
         # build a prior distribution to compare to
-        self.ics_prior = DiagonalGaussian(z_size = [hps['batch_size'], hps['ic_dim']], name='ics_prior', var = hps['ic_prior_var'])
-        self.cos_prior = DiagonalGaussian(z_size = [hps['batch_size'], hps['num_steps'], hps['co_dim']], name='cos_prior', var = hps['co_prior_var'])
-        self.cos_posterior = DiagonalGaussianFromExisting(self.co_mean_states, \
-                                                          self.co_logvar_states)
-
-        # print ics_prior.mean_bxn
-        # print ics_posterior.mean_bxn
-        # print cos_prior.mean_bxn
-        # print cos_posterior.mean_bxn
-        # tmp = cos_posterior.mean_bxn - cos_prior.mean_bxn
-        # print tmp
-        # sys.exit()
+        self.ics_prior = DiagonalGaussian(
+            z_size = [hps['batch_size'], hps['ic_dim']], name='ics_prior',
+            var = hps['ic_prior_var'])
+        self.cos_prior = DiagonalGaussian(
+            z_size = [hps['batch_size'], hps['num_steps'], hps['co_dim']],
+            name='cos_prior', var = hps['co_prior_var'])
+        self.cos_posterior = DiagonalGaussianFromExisting(
+            self.co_mean_states,
+            self.co_logvar_states)
 
         # cost for each trial
         self.kl_cost_g0_b = KLCost_GaussianGaussian(self.ics_posterior, self.ics_prior).kl_cost_b
@@ -184,8 +199,8 @@ class LFADS(object):
         # total KL cost
         self.kl_cost_g0 = tf.reduce_mean(self.kl_cost_g0_b)
         self.kl_cost_co = tf.reduce_mean( tf.reduce_mean(self.kl_cost_co_b, [1]) )
-        self.kl_cost = self.kl_cost_g0 * self.kl_ic_weight +\
-                       self.kl_cost_co * self.kl_co_weight
+        self.kl_cost = self.kl_cost_g0 * hps['kl_ic_weight'] +\
+                       self.kl_cost_co * hps['kl_co_weight']
 
         ## calculate reconstruction cost
         self.loglikelihood_b_t = Poisson(self.logrates).logp(self.input_data)
@@ -201,8 +216,10 @@ class LFADS(object):
         # get the list of trainable variables
         self.trainable_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
         self.gradients = tf.gradients(self.total_cost, self.trainable_vars)
-        self.gradients, self.grad_global_norm = tf.clip_by_global_norm(self.gradients, \
-                                                                       hps['max_grad_norm'])
+        self.gradients, self.grad_global_norm = \
+                                                tf.clip_by_global_norm(
+                                                    self.gradients, \
+                                                    hps['max_grad_norm'])
         self.opt = tf.train.AdamOptimizer(self.learning_rate, beta1=0.9, beta2=0.999,
                                      epsilon=1e-01)
 

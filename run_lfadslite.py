@@ -81,6 +81,9 @@ hps['factors_dim'] = 20
 hps['ic_dim'] = 10
 hps['co_dim'] = 1
 
+hps['cell_clip_value'] = 5.0
+hps['do_causal_controller'] = True
+
 # hps
 hps['keep_prob']=0.95
 hps['ic_prior_var']=0.1
@@ -94,9 +97,11 @@ hps['learning_rate_decay_factor'] = 0.97
 hps['learning_rate_n_to_compare'] = 6
 hps['learning_rate_stop'] = 0.00001
 
+hps['kl_ic_weight'] = 1.0
+hps['kl_co_weight'] = 1.0
+
 ##   haven't implemented these in lfadslite
 # hps['feedback_factors_or_rates'] = 'factors'
-# hps['cell_clip_value'] = 5.0  
 
 
 
