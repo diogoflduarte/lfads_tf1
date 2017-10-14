@@ -41,13 +41,15 @@ class SimpleModel(object):
 
         with tf.variable_scope('ic_enc'):
             ## ic_encoder
-            self.ic_enc_rnn_obj = BidirectionalDynamicRNN(state_dim = hps['ic_enc_dim'],
-                                                 inputs = self.input_data,
-                                                 sequence_lengths = self.sequence_lengths,
-                                                 batch_size = hps['batch_size'],
-                                                 name = 'ic_enc',
-                                                 rnn_type = 'gru',
-                                                 output_keep_prob = self.keep_prob)
+            self.ic_enc_rnn_obj = BidirectionalDynamicRNN(
+                state_dim = hps['ic_enc_dim'],
+                sequence_lengths = self.sequence_lengths,
+                batch_size = hps['batch_size'],
+                name = 'ic_enc',
+                inputs = self.input_data,
+                initial_state = None,
+                rnn_type = 'gru',
+                output_keep_prob = self.keep_prob)
 
             
             # map the ic_encoder onto the actual ic layer
@@ -73,14 +75,13 @@ class SimpleModel(object):
         with tf.variable_scope('generator'):
             self.g0 = linear(self.ics, hps['gen_dim'], name='ics_2_g0')
 
-            fake_inputs = tf.zeros( [hps['batch_size'], hps['num_steps'], 1], dtype=tf.float32)
             # setup the actual generator
             self.gen_rnn_obj = DynamicRNN(state_dim = hps['gen_dim'],
-                                          inputs = fake_inputs,
                                           sequence_lengths = self.sequence_lengths,
                                           batch_size = hps['batch_size'],
                                           name = 'gen',
                                           initial_state = self.g0,
+                                          inputs = None,
                                           rnn_type = 'gru',
                                           output_keep_prob = self.keep_prob)
 

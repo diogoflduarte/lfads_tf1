@@ -102,9 +102,9 @@ def makeInitialState(state_dim, batch_size, name):
 
 
 class BidirectionalDynamicRNN(object):
-    def __init__(self, state_dim, inputs, sequence_lengths, batch_size, name,
-                 cell, initial_state=None, rnn_type='gru', output_size=None,
-                 output_keep_prob=1.0, input_keep_prob=1.0):
+    def __init__(self, state_dim, sequence_lengths, batch_size, name,
+                 cell = None, inputs = None, initial_state=None, rnn_type='gru',
+                 output_size=None, output_keep_prob=1.0, input_keep_prob=1.0):
 
         if initial_state is None:
             # need initial states for fw and bw
@@ -118,7 +118,7 @@ class BidirectionalDynamicRNN(object):
                                          initializer=self.init_initter,
                                          dtype=tf.float32)
             # lstm has a second parameter c
-            if rnn_type.lower() is 'lstm':
+            if rnn_type.lower() == 'lstm':
                 self.init_c_fw = tf.get_variable(name+'_init_c_fw', [1, state_dim],
                                              initializer=self.init_initter,
                                              dtype=tf.float32)
@@ -134,14 +134,14 @@ class BidirectionalDynamicRNN(object):
             self.init_h_bw_tiled = tf.tile(self.init_h_bw,
                                            tile_dimensions, name=name+'_h_bw_tile')
             # tile the c param if needed
-            if rnn_type.lower() is 'lstm':
+            if rnn_type.lower() == 'lstm':
                 self.init_c_fw_tiled = tf.tile(self.init_c_fw,
                                                tile_dimensions, name=name+'_c_fw_tile')
                 self.init_c_bw_tiled = tf.tile(self.init_c_bw,
                                                tile_dimensions, name=name+'_c_bw_tile')
 
             # do tupling if needed
-            if rnn_type.lower() is 'lstm':
+            if rnn_type.lower() == 'lstm':
                 # lstm state is a tuple
                 self.init_fw = tf.contrib.rnn.LSTMStateTuple(self.init_c_fw_tiled, self.init_h_fw_tiled)
                 self.init_bw = tf.contrib.rnn.LSTMStateTuple(self.init_c_bw_tiled, self.init_h_bw_tiled)
@@ -152,8 +152,16 @@ class BidirectionalDynamicRNN(object):
             self.init_fw, self.init_bw = initial_state
 
         #pick your cell
-        self.cell = cell
+        if rnn_type.lower() == 'lstm':
+            self.cell = tf.nn.rnn_cell.LSTMCell(num_units = state_dim,
+                                                state_is_tuple=True)
+        elif rnn_type.lower() == 'gru':
+            self.cell = tf.nn.rnn_cell.GRUCell(num_units = state_dim)
+        else:
+            self.cell = cell
 
+        print rnn_type.lower()
+        print self.cell
         # add dropout if requested
         if output_keep_prob != 1.0:
             self.cell = tf.contrib.rnn.DropoutWrapper(
@@ -163,6 +171,12 @@ class BidirectionalDynamicRNN(object):
         # convenient way to take a low-D output from network
         if output_size is not None:
             self.cell = tf.contrib.rnn.OutputProjectionWrapper(self.cell, output_size = output_size)
+            
+        # for some reason I can't get dynamic_rnn to work without inputs
+        #  so generate fake inputs if needed...
+        if inputs is None:
+            inputs = tf.zeros( [batch_size, max(sequence_lengths), 1],
+                               dtype=tf.float32)
             
         self.states, self.last = tf.nn.bidirectional_dynamic_rnn(
             cell_fw = self.cell,
@@ -177,9 +191,7 @@ class BidirectionalDynamicRNN(object):
         # concatenate the outputs of the encoders (h only) into one vector
         self.last_fw, self.last_bw = self.last
 
-        self.cell = cell
-
-        if rnn_type.lower() is 'lstm':
+        if rnn_type.lower() == 'lstm':
             self.last_tot = tf.concat(axis=1, values=[self.last_fw.h, self.last_bw.h])
         else:
             self.last_tot = tf.concat(axis=1, values=[self.last_fw, self.last_bw])
@@ -187,8 +199,8 @@ class BidirectionalDynamicRNN(object):
 
 
 class DynamicRNN(object):
-    def __init__(self, state_dim, inputs, sequence_lengths, batch_size, name,
-                 cell, initial_state=None, rnn_type='gru',
+    def __init__(self, state_dim, sequence_lengths, batch_size, name,
+                 cell = None, inputs = None, initial_state=None, rnn_type='gru',
                  output_size=None, output_size2=None, output_keep_prob=1.0,
                  input_keep_prob=1.0):
         if initial_state is None:
@@ -200,7 +212,7 @@ class DynamicRNN(object):
             self.init_h = tf.get_variable(name+'_init_h', [1, state_dim],
                                       initializer=self.init_initter,
                                       dtype=tf.float32)
-            if rnn_type.lower() is 'lstm':
+            if rnn_type.lower() == 'lstm':
                 self.init_c = tf.get_variable(name+'_init_c', [1, state_dim],
                                           initializer=self.init_initter,
                                           dtype=tf.float32)
@@ -211,11 +223,11 @@ class DynamicRNN(object):
             self.init_h_tiled = tf.tile(self.init_h,
                                     tile_dimensions, name=name+'_tile')
 
-            if rnn_type.lower() is 'lstm':
+            if rnn_type.lower() == 'lstm':
                 self.init_c_tiled = tf.tile(self.init_c,
                                         tile_dimensions, name=name+'_tile')
 
-            if rnn_type.lower() is 'lstm':
+            if rnn_type.lower() == 'lstm':
                 #tuple for lstm
                 self.init = tf.contrib.rnn.LSTMStateTuple(self.init_c_tiled, self.init_h_tiled)
             else:
@@ -224,11 +236,13 @@ class DynamicRNN(object):
             self.init = initial_state
 
         #pick your cell
-        if rnn_type.lower() is 'lstm':
+        if rnn_type.lower() == 'lstm':
             self.cell = tf.nn.rnn_cell.LSTMCell(num_units = state_dim,
                                                 state_is_tuple=True)
-        else:
+        elif rnn_type.lower() == 'gru':
             self.cell = tf.nn.rnn_cell.GRUCell(num_units = state_dim)
+        else:
+            self.cell = cell
 
         # add dropout if requested
         if output_keep_prob != 1.0:
@@ -244,7 +258,14 @@ class DynamicRNN(object):
         # convenient way to take another output from network
         if output_size2 is not None:
             self.cell = tf.contrib.rnn.OutputProjectionWrapper(self.cell, output_size = output_size2)
-            
+
+        # for some reason I can't get dynamic_rnn to work without inputs
+        #  so generate fake inputs if needed...
+        if inputs is None:
+            inputs = tf.zeros( [batch_size, max(sequence_lengths), 1],
+                               dtype=tf.float32)
+            print inputs
+        # call dynamic_rnn
         self.states, self.last = tf.nn.dynamic_rnn(
             cell = self.cell,
             dtype = tf.float32,

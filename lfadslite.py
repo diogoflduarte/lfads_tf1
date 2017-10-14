@@ -48,20 +48,22 @@ class LFADS(object):
             ## ic_encoder
             self.ic_enc_rnn_obj = BidirectionalDynamicRNN(
                 state_dim = hps['ic_enc_dim'],
-                inputs = self.input_data,
                 sequence_lengths = self.sequence_lengths,
                 batch_size = hps['batch_size'],
                 name = 'ic_enc',
                 cell = ic_enc_cell,
+                inputs = self.input_data,
+                initial_state = None,
                 rnn_type = 'customgru',
                 output_keep_prob = self.keep_prob)
 
             # map the ic_encoder onto the actual ic layer
-            self.ics_posterior = DiagonalGaussianFromInput(x = self.ic_enc_rnn_obj.last_tot,
-                                        z_size = hps['ic_dim'],
-                                        name = 'ic_enc_2_ics',
-                                        var_min = hps['ic_post_var_min'],
-                                        )
+            self.ics_posterior = DiagonalGaussianFromInput(
+                x = self.ic_enc_rnn_obj.last_tot,
+                z_size = hps['ic_dim'],
+                name = 'ic_enc_2_ics',
+                var_min = hps['ic_post_var_min'],
+            )
 
         # to go forward, either sample from the posterior, or take mean
         #     (depending on current usage)
@@ -76,7 +78,31 @@ class LFADS(object):
         ### CONTROLLER construction
         # this should only be done if a controller is requested
         # if not, skip all these graph elements like so:
-        if hps['co_dim'] !=0:
+        if hps['co_dim'] ==0:
+            with tf.variable_scope('generator'):
+                gen_cell = CustomGRUCell(num_units = hps['ic_enc_dim'],\
+                                            batch_size = hps['batch_size'],
+                                            clip_value = hps['cell_clip_value'])
+                # setup generator
+                self.gen_rnn_obj = DynamicRNN(state_dim = hps['gen_dim'],
+                                              sequence_lengths = self.sequence_lengths,
+                                              batch_size = hps['batch_size'],
+                                              name = 'gen',
+                                              cell = gen_cell,
+                                              inputs = None,
+                                              initial_state = self.g0,
+                                              rnn_type = 'customgru',
+                                              output_keep_prob = self.keep_prob)
+            with tf.variable_scope('factors'):
+
+                ## factors
+                self.fac_obj = LinearTimeVarying(inputs = self.gen_rnn_obj.states,
+                                                    output_size = hps['factors_dim'],
+                                                    transform_name = 'gen_2_factors',
+                                                    output_name = 'factors_concat',
+                                                 )
+                self.fac_states = self.fac_obj.output
+        else:
             with tf.variable_scope('ci_enc'):
 
                 ci_enc_cell = CustomGRUCell(num_units = hps['ci_enc_dim'],\
@@ -85,20 +111,32 @@ class LFADS(object):
                 ## ci_encoder
                 self.ci_enc_rnn_obj = BidirectionalDynamicRNN(
                     state_dim = hps['ci_enc_dim'],
-                    inputs = self.input_data,
                     sequence_lengths = self.sequence_lengths,
                     batch_size = hps['batch_size'],
                     name = 'ci_enc',
                     cell = ci_enc_cell,
+                    inputs = self.input_data,
+                    initial_state = None,
                     rnn_type = 'customgru',
                     output_keep_prob = self.keep_prob)
-                # states from bidirec RNN come out as a tuple. concatenate those:
+
                 if not hps['do_causal_controller']:
-                    self.ci_enc_rnn_states = tf.concat(self.ci_enc_rnn_obj.states,
-                                                       axis=2, name='ci_enc_rnn_states')
+                    self.ci_enc_rnn_states = self.ci_enc_rnn_obj.states
                 else:
                     # if causal controller, only use the fwd rnn
-                    [self.ci_enc_rnn_states, _]  = self.ci_enc_rnn_obj.states
+                    [ci_enc_fwd_states, _]  = self.ci_enc_rnn_obj.states
+                    if hps['controller_input_lag'] > 0:
+                        toffset = hps['controller_input_lag']
+                        leading_zeros = tf.zeros_like(ci_enc_fwd_states[:,0:toffset,:])
+                        self.ci_enc_rnn_states = tf.concat([leading_zeros,
+                                                            ci_enc_fwd_states[:,0:-toffset,:]],
+                                                           axis=1)
+                    else:
+                        [self.ci_enc_rnn_states, _]  = self.ci_enc_rnn_obj.states
+                
+                # states from bidirec RNN come out as a tuple. concatenate those:
+                self.ci_enc_rnn_states = tf.concat(self.ci_enc_rnn_states,
+                                                   axis=2, name='ci_enc_rnn_states')
 
                 ## take a linear transform of the ci_enc output
                 #    this is to lower the dimensionality of the ci_enc
@@ -112,61 +150,62 @@ class LFADS(object):
                         nonlinearity = None)
                     self.ci_enc_outputs = self.ci_enc_object.output
 
-        ## the controller, controller outputs, generator, and factors are implemented
-        #     in one RNN whose individual cell is "complex"
-        #  this is required do to feedback pathway from factors->controller.
-        #    impossible to dynamically unroll with separate RNNs.
-        with tf.variable_scope('complexcell'):
-            # the "complexcell" architecture requires an initial state definition
-            # have to define states for each of the components, then concatenate them
-            con_init_state = makeInitialState(hps['con_dim'],
-                                              hps['batch_size'],
-                                              'controller')
-            co_mean_init_state = makeInitialState(hps['co_dim'],
+            ## the controller, controller outputs, generator, and factors are implemented
+            #     in one RNN whose individual cell is "complex"
+            #  this is required do to feedback pathway from factors->controller.
+            #    impossible to dynamically unroll with separate RNNs.
+            with tf.variable_scope('complexcell'):
+                # the "complexcell" architecture requires an initial state definition
+                # have to define states for each of the components, then concatenate them
+                con_init_state = makeInitialState(hps['con_dim'],
                                                   hps['batch_size'],
-                                                  'controller_output_mean')
-            co_logvar_init_state = makeInitialState(hps['co_dim'],
-                                                    hps['batch_size'],
-                                                    'controller_output_logvar')
-            fac_init_state = makeInitialState(hps['factors_dim'],
-                                              hps['batch_size'],
-                                              'factor')
-            comcell_init_state = [con_init_state, self.g0,
-                                       co_mean_init_state, co_logvar_init_state,
-                                       fac_init_state]
-            self.complexcell_init_state = tf.concat(axis=1, values = comcell_init_state)
+                                                  'controller')
+                co_mean_init_state = makeInitialState(hps['co_dim'],
+                                                      hps['batch_size'],
+                                                      'controller_output_mean')
+                co_logvar_init_state = makeInitialState(hps['co_dim'],
+                                                        hps['batch_size'],
+                                                        'controller_output_logvar')
+                fac_init_state = makeInitialState(hps['factors_dim'],
+                                                  hps['batch_size'],
+                                                  'factor')
+                comcell_init_state = [con_init_state, self.g0,
+                                           co_mean_init_state, co_logvar_init_state,
+                                           fac_init_state]
+                self.complexcell_init_state = tf.concat(axis=1, values = comcell_init_state)
 
 
-            # here is what the state vector will look like
-            self.comcell_state_dims = [hps['con_dim'],
-                                       hps['gen_dim'],
-                                       hps['co_dim'], # for the controller output means
-                                       hps['co_dim'], # for the variances
-                                       hps['factors_dim']]
+                # here is what the state vector will look like
+                self.comcell_state_dims = [hps['con_dim'],
+                                           hps['gen_dim'],
+                                           hps['co_dim'], # for the controller output means
+                                           hps['co_dim'], # for the variances
+                                           hps['factors_dim']]
 
-            # construct the complexcell
-            self.complexcell=ComplexCell(hps['con_dim'],
-                                         hps['gen_dim'],
-                                         hps['co_dim'],
-                                         hps['factors_dim'],
-                                         hps['con_fac_in_dim'],
-                                         hps['batch_size'],
-                                         var_min = hps['co_post_var_min'],
-                                         kind = self.run_type)
+                # construct the complexcell
+                self.complexcell=ComplexCell(hps['con_dim'],
+                                             hps['gen_dim'],
+                                             hps['co_dim'],
+                                             hps['factors_dim'],
+                                             hps['con_fac_in_dim'],
+                                             hps['batch_size'],
+                                             var_min = hps['co_post_var_min'],
+                                             kind = self.run_type)
 
-            # construct the actual RNN
-            #   its inputs are the output of the controller_input_enc
-            self.complex_outputs, self.complex_final_state =\
-            tf.nn.dynamic_rnn(self.complexcell,
-                              inputs = self.ci_enc_outputs,
-                              initial_state = self.complexcell_init_state,
-                              time_major=False)
+                # construct the actual RNN
+                #   its inputs are the output of the controller_input_enc
+                self.complex_outputs, self.complex_final_state =\
+                tf.nn.dynamic_rnn(self.complexcell,
+                                  inputs = self.ci_enc_outputs,
+                                  initial_state = self.complexcell_init_state,
+                                  time_major=False)
 
-            self.con_states, self.gen_states, self.co_mean_states, self.co_logvar_states, self.fac_states =\
-            tf.split(self.complex_outputs,
-                     self.comcell_state_dims,
-                     axis=2)
+                self.con_states, self.gen_states, self.co_mean_states, self.co_logvar_states, self.fac_states =\
+                tf.split(self.complex_outputs,
+                         self.comcell_state_dims,
+                         axis=2)
 
+        # now back to code that runs for all models
         with tf.variable_scope('rates'):
             ## rates
             rates_object = LinearTimeVarying(inputs = self.fac_states,
@@ -181,31 +220,42 @@ class LFADS(object):
 
 
         ## calculate the KL cost
-        # build a prior distribution to compare to
+        # g0 - build a prior distribution to compare to
         self.ics_prior = DiagonalGaussian(
             z_size = [hps['batch_size'], hps['ic_dim']], name='ics_prior',
             var = hps['ic_prior_var'])
-        self.cos_prior = DiagonalGaussian(
-            z_size = [hps['batch_size'], hps['num_steps'], hps['co_dim']],
-            name='cos_prior', var = hps['co_prior_var'])
-        self.cos_posterior = DiagonalGaussianFromExisting(
-            self.co_mean_states,
-            self.co_logvar_states)
 
-        # cost for each trial
-        self.kl_cost_g0_b = KLCost_GaussianGaussian(self.ics_posterior, self.ics_prior).kl_cost_b
-        self.kl_cost_co_b = KLCost_GaussianGaussian(self.cos_posterior, self.cos_prior).kl_cost_b
-
-        # total KL cost
+        # g0 KL cost for each trial
+        self.kl_cost_g0_b = KLCost_GaussianGaussian(self.ics_posterior,
+                                                    self.ics_prior).kl_cost_b
+        # g0 KL cost for the whole batch
         self.kl_cost_g0 = tf.reduce_mean(self.kl_cost_g0_b)
-        self.kl_cost_co = tf.reduce_mean( tf.reduce_mean(self.kl_cost_co_b, [1]) )
-        self.kl_cost = self.kl_cost_g0 * hps['kl_ic_weight'] +\
-                       self.kl_cost_co * hps['kl_co_weight']
+        # total KL cost
+        self.kl_cost = self.kl_cost_g0 * hps['kl_ic_weight']
+        if hps['co_dim'] !=0 :
+            # if there are controller outputs, calculate a KL cost for them
+            # first build a prior to compare to
+            self.cos_prior = DiagonalGaussian(
+                z_size = [hps['batch_size'], hps['num_steps'], hps['co_dim']],
+                name='cos_prior', var = hps['co_prior_var'])
+            # then build a posterior
+            self.cos_posterior = DiagonalGaussianFromExisting(
+                self.co_mean_states,
+                self.co_logvar_states)
+
+            # CO KL cost per timestep
+            self.kl_cost_co_b_t = KLCost_GaussianGaussian(self.cos_posterior,
+                                                          self.cos_prior).kl_cost_b
+            # CO KL cost for the batch
+            self.kl_cost_co = tf.reduce_mean(
+                tf.reduce_mean(self.kl_cost_co_b_t, [1]) )
+            self.kl_cost += self.kl_cost_co * hps['kl_co_weight']
 
         ## calculate reconstruction cost
         self.loglikelihood_b_t = Poisson(self.logrates).logp(self.input_data)
         # cost for each trial
-        self.log_p_b = tf.reduce_sum( tf.reduce_sum(self.loglikelihood_b_t, [2] ), [1] )
+        self.log_p_b = tf.reduce_sum(
+            tf.reduce_sum(self.loglikelihood_b_t, [2] ), [1] )
         # total rec cost
         self.log_p = tf.reduce_mean( self.log_p_b, [0])
         self.rec_cost = -self.log_p

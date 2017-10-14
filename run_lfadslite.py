@@ -79,10 +79,11 @@ hps['con_fac_in_dim'] = 10
 #ics, cis, factors
 hps['factors_dim'] = 20
 hps['ic_dim'] = 10
-hps['co_dim'] = 1
+hps['co_dim'] = 0
 
 hps['cell_clip_value'] = 5.0
 hps['do_causal_controller'] = True
+hps['controller_input_lag'] = 1
 
 # hps
 hps['keep_prob']=0.95
