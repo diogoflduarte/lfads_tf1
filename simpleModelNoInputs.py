@@ -12,7 +12,7 @@ from helper_funcs import BidirectionalDynamicRNN, DynamicRNN, LinearTimeVarying
 from helper_funcs import KLCost_GaussianGaussian, Poisson
 from plot_funcs import plot_data, close_all_plots
 from data_funcs import read_datasets
-from complexcell import ComplexCell
+from customcells import ComplexCell # Updated from 'complexcell' to 'customcells'
 
 
 
