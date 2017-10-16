@@ -7,7 +7,9 @@ def kind_dict(kind):
     return {
         'train': 1,
         'posterior_sample_and_average': 2,
-        'posterior_mean': 3
+        'posterior_mean': 3,
+        'prior_sample': 4,
+        'write_model_params': 5,
         }[kind]
 
 
@@ -38,6 +40,11 @@ def linear(x, out_size, name):
 def ListOfRandomBatches(num_trials, batch_size):
     assert num_trials >= batch_size, "Your batch size is bigger than num_trials..."
     random_order = np.random.permutation(range(num_trials))
+    even_num_of_batches = int( np.floor ( num_trials / batch_size ) )
+    trials_to_keep = even_num_of_batches * batch_size
+    #if num_trials % batch_size != 0:
+    #    print("Warning: throwing out %i trials per epoch" % (num_trials-trials_to_keep) )
+    random_order = random_order[0:(trials_to_keep)]
     batches = [random_order[i:i+batch_size] for i in range(0, len(random_order), batch_size)]
     return batches
 
@@ -102,7 +109,7 @@ def makeInitialState(state_dim, batch_size, name):
 
 
 class BidirectionalDynamicRNN(object):
-    def __init__(self, state_dim, sequence_lengths, batch_size, name,
+    def __init__(self, state_dim, batch_size, name, sequence_lengths=None,
                  cell = None, inputs = None, initial_state=None, rnn_type='gru',
                  output_size=None, output_keep_prob=1.0, input_keep_prob=1.0):
 
@@ -160,8 +167,6 @@ class BidirectionalDynamicRNN(object):
         else:
             self.cell = cell
 
-        print rnn_type.lower()
-        print self.cell
         # add dropout if requested
         if output_keep_prob != 1.0:
             self.cell = tf.contrib.rnn.DropoutWrapper(
@@ -199,7 +204,7 @@ class BidirectionalDynamicRNN(object):
 
 
 class DynamicRNN(object):
-    def __init__(self, state_dim, sequence_lengths, batch_size, name,
+    def __init__(self, state_dim, batch_size, name, sequence_lengths = None,
                  cell = None, inputs = None, initial_state=None, rnn_type='gru',
                  output_size=None, output_size2=None, output_keep_prob=1.0,
                  input_keep_prob=1.0):

@@ -2,6 +2,7 @@ import tensorflow as tf
 import numpy as np
 import sys
 import time
+import os
 
 
 # utils defined by CP
@@ -22,8 +23,8 @@ from customcells import CustomGRUCell
 
 class LFADS(object):
 
-    def __init__(self, hps, ):
-        tf.reset_default_graph();
+    def __init__(self, hps, datasets = None):
+#        tf.reset_default_graph();
 
         self.learning_rate = tf.Variable(float(hps['learning_rate_init']), trainable=False, name="learning_rate")
         self.learning_rate_decay_op = self.learning_rate.assign(\
@@ -34,12 +35,16 @@ class LFADS(object):
 
         allsets = hps['dataset_dims'].keys()
         self.input_dim = hps['dataset_dims'][allsets[0]]
-        self.sequence_lengths = hps['sequence_lengths']
+        #self.sequence_lengths = hps['sequence_lengths']
 
         with tf.variable_scope('placeholders'):
-            self.input_data = tf.placeholder(tf.float32, shape = [hps['batch_size'], hps['num_steps'], self.input_dim], name='input_data')
+            self.dataset_ph = tf.placeholder(tf.float32, shape = [hps['batch_size'], hps['num_steps'], self.input_dim], name='input_data')
             self.keep_prob = tf.placeholder(tf.float32, name='keep_prob')
             self.run_type = tf.placeholder(tf.int16, name='run_type')
+            self.kl_ic_weight = tf.placeholder(tf.float32, name='kl_ic_weight')
+            self.kl_co_weight = tf.placeholder(tf.float32, name='kl_co_weight')
+            # name of the dataset
+            self.dataName = tf.placeholder(tf.string, shape=(), name='dataset_name')
 
         with tf.variable_scope('ic_enc'):
             ic_enc_cell = CustomGRUCell(num_units = hps['ic_enc_dim'],\
@@ -48,11 +53,10 @@ class LFADS(object):
             ## ic_encoder
             self.ic_enc_rnn_obj = BidirectionalDynamicRNN(
                 state_dim = hps['ic_enc_dim'],
-                sequence_lengths = self.sequence_lengths,
                 batch_size = hps['batch_size'],
                 name = 'ic_enc',
                 cell = ic_enc_cell,
-                inputs = self.input_data,
+                inputs = self.dataset_ph,
                 initial_state = None,
                 rnn_type = 'customgru',
                 output_keep_prob = self.keep_prob)
@@ -85,7 +89,6 @@ class LFADS(object):
                                             clip_value = hps['cell_clip_value'])
                 # setup generator
                 self.gen_rnn_obj = DynamicRNN(state_dim = hps['gen_dim'],
-                                              sequence_lengths = self.sequence_lengths,
                                               batch_size = hps['batch_size'],
                                               name = 'gen',
                                               cell = gen_cell,
@@ -111,11 +114,10 @@ class LFADS(object):
                 ## ci_encoder
                 self.ci_enc_rnn_obj = BidirectionalDynamicRNN(
                     state_dim = hps['ci_enc_dim'],
-                    sequence_lengths = self.sequence_lengths,
                     batch_size = hps['batch_size'],
                     name = 'ci_enc',
                     cell = ci_enc_cell,
-                    inputs = self.input_data,
+                    inputs = self.dataset_ph,
                     initial_state = None,
                     rnn_type = 'customgru',
                     output_keep_prob = self.keep_prob)
@@ -231,7 +233,7 @@ class LFADS(object):
         # g0 KL cost for the whole batch
         self.kl_cost_g0 = tf.reduce_mean(self.kl_cost_g0_b)
         # total KL cost
-        self.kl_cost = self.kl_cost_g0 * hps['kl_ic_weight']
+        self.kl_cost = self.kl_cost_g0 * self.kl_ic_weight
         if hps['co_dim'] !=0 :
             # if there are controller outputs, calculate a KL cost for them
             # first build a prior to compare to
@@ -249,10 +251,10 @@ class LFADS(object):
             # CO KL cost for the batch
             self.kl_cost_co = tf.reduce_mean(
                 tf.reduce_mean(self.kl_cost_co_b_t, [1]) )
-            self.kl_cost += self.kl_cost_co * hps['kl_co_weight']
+            self.kl_cost += self.kl_cost_co * self.kl_co_weight
 
         ## calculate reconstruction cost
-        self.loglikelihood_b_t = Poisson(self.logrates).logp(self.input_data)
+        self.loglikelihood_b_t = Poisson(self.logrates).logp(self.dataset_ph)
         # cost for each trial
         self.log_p_b = tf.reduce_sum(
             tf.reduce_sum(self.loglikelihood_b_t, [2] ), [1] )
@@ -273,21 +275,161 @@ class LFADS(object):
         self.opt = tf.train.AdamOptimizer(self.learning_rate, beta1=0.9, beta2=0.999,
                                      epsilon=1e-01)
 
+        # global that holds current step number
         self.train_step = tf.get_variable("global_step", [], tf.int64,
                                      tf.zeros_initializer(),
                                      trainable=False)
         self.train_op = self.opt.apply_gradients(
             zip(self.gradients, self.trainable_vars), global_step = self.train_step)
 
+        # hooks to save down model
+        self.seso_saver = tf.train.Saver(tf.global_variables(),
+                                     max_to_keep=hps.max_ckpt_to_keep)
+
+        # lowest validation error
+        self.lve_saver = tf.train.Saver(tf.global_variables(),
+                                    max_to_keep=hps.max_ckpt_to_keep)
+        
+
+        self.hps = hps
+
+    ## functions to interface with the outside world
+    def build_feed_dict(self, train_name, data_bxtxd, run_type = None,
+                        keep_prob=None, kl_ic_weight=1.0, kl_co_weight=1.0):
+      """Build the feed dictionary, handles cases where there is no value defined.
+
+      Args:
+        train_name: The key into the datasets, to set the tf.case statement for
+          the proper readin / readout matrices.
+        data_bxtxd: The data tensor
+        keep_prob: The drop out keep probability.
+
+      Returns:
+        The feed dictionary with TF tensors as keys and data as values, for use
+        with tf.Session.run()
+
+      """
+      feed_dict = {}
+      B, T, _ = data_bxtxd.shape
+      feed_dict[self.dataName] = train_name
+      feed_dict[self.dataset_ph] = data_bxtxd
+      feed_dict[self.kl_ic_weight] = kl_ic_weight
+      feed_dict[self.kl_co_weight] = kl_co_weight
+
+      if run_type is None:
+        feed_dict[self.run_type] = self.hps.kind
+      else:
+        feed_dict[self.run_type] = run_type
+          
+      if keep_prob is None:
+        feed_dict[self.keep_prob] = self.hps.keep_prob
+      else:
+        feed_dict[self.keep_prob] = keep_prob
+
+      return feed_dict
 
 
-## functions to interface with the outside world
+
+    def shuffle_and_flatten_datasets(self, datasets, kind='train'):
+      """Since LFADS supports multiple datasets in the same dynamical model,
+      we have to be careful to use all the data in a single training epoch.  But
+      since the datasets my have different data dimensionality, we cannot batch
+      examples from data dictionaries together.  Instead, we generate random
+      batches within each data dictionary, and then randomize these batches
+      while holding onto the dataname, so that when it's time to feed
+      the graph, the correct in/out matrices can be selected, per batch.
+
+      Args:
+        datasets: A dict of data dicts.  The dataset dict is simply a
+          name(string)-> data dictionary mapping (See top of lfads.py).
+        kind: 'train' or 'valid'
+
+      Returns:
+        A flat list, in which each element is a pair ('name', indices).
+      """
+      batch_size = self.hps.batch_size
+      ndatasets = len(datasets)
+      random_example_idxs = {}
+      epoch_idxs = {}
+      all_name_example_idx_pairs = []
+      kind_data = kind + '_data'
+      for name, data_dict in datasets.items():
+        nexamples, ntime, data_dim = data_dict[kind_data].shape
+        epoch_idxs[name] = 0
+        random_example_idxs = \
+          ListOfRandomBatches(nexamples, batch_size)
+
+        epoch_size = len(random_example_idxs)
+        names = [name] * epoch_size
+        all_name_example_idx_pairs += zip(names, random_example_idxs)
+
+      # shuffle the batches so the dataset order is scrambled
+      np.random.shuffle(all_name_example_idx_pairs) #( shuffle in place)
+
+      return all_name_example_idx_pairs
+
+
+    def train_epoch(self, datasets, do_save_ckpt, kl_ic_weight, kl_co_weight):
+        collected_op_values = self.run_epoch(datasets, kl_ic_weight,
+                                             kl_co_weight, "train")
+
+        if do_save_ckpt:
+          session = tf.get_default_session()
+          checkpoint_path = os.path.join(self.hps.lfads_save_dir,
+                                         self.hps.checkpoint_name + '.ckpt')
+          self.seso_saver.save(session, checkpoint_path,
+                               global_step=self.train_step)
+
+        return collected_op_values
+
+    def valid_epoch(self, datasets, kl_ic_weight, kl_co_weight):
+        collected_op_values = self.run_epoch(datasets, kl_ic_weight,
+                                             kl_co_weight, "valid")
+        return collected_op_values
+
+    def run_epoch(self, datasets, kl_ic_weight, kl_co_weight, train_or_valid = "train"):
+        ops_to_eval = [self.total_cost, self.rec_cost,
+                       self.kl_cost]
+        # get a full list of all data for this type (train/valid)
+        all_name_example_idx_pairs = \
+          self.shuffle_and_flatten_datasets(datasets, train_or_valid)
+        
+        if train_or_valid == "train":
+            ops_to_eval.append(self.train_op)
+            kind_data = "train_data"
+            keep_prob = self.hps.keep_prob
+        else:
+            kind_data = "valid_data"
+            keep_prob = 1.0
+            
+        session = tf.get_default_session()
+
+        evald_ops = []
+        # iterate over all datasets
+        for name, example_idxs in all_name_example_idx_pairs:
+            data_dict = datasets[name]
+            data_extxd = data_dict[kind_data]
+
+            this_batch = data_extxd[example_idxs,:,:]
+            feed_dict = self.build_feed_dict(name, this_batch, keep_prob=keep_prob,
+                                             run_type = kind_dict("train"),
+                                             kl_ic_weight = kl_ic_weight,
+                                             kl_co_weight = kl_co_weight)
+            evald_ops_this_batch = session.run(ops_to_eval, feed_dict = feed_dict)
+            # for training runs, there is an extra output argument. kill it
+            if len(evald_ops_this_batch) > 3:
+                tc, rc, kl, _= evald_ops_this_batch
+                evald_ops_this_batch = (tc, rc, kl)
+            evald_ops.append(evald_ops_this_batch)
+        evald_ops = np.mean(evald_ops, axis=0)
+        return evald_ops
+        
         
     def train_batch(self, dict_from_py):
         session = tf.get_default_session()
         ops_to_eval = [self.train_op, self.total_cost, self.rec_cost, \
                              self.kl_cost, self.rates, self.learning_rate]
-        feed_dict = {self.input_data: dict_from_py['input_data'],
+        feed_dict = {self.dataset_ph: dict_from_py['dataset_ph'],
                      self.keep_prob: dict_from_py['keep_prob'],
                      self.run_type: kind_dict("train")}
         return session.run(ops_to_eval, feed_dict)
@@ -317,3 +459,42 @@ class LFADS(object):
     def get_learning_rate(self):
         session = tf.get_default_session()
         return session.run(self.learning_rate)
+
+
+    def train_model(self, datasets):
+        hps = self.hps
+        has_any_valid_set = False
+        for data_dict in datasets.values():
+          if data_dict['valid_data'] is not None:
+            has_any_valid_set = True
+            break
+
+        session = tf.get_default_session()
+        lr = session.run(self.learning_rate)
+        lr_stop = hps.learning_rate_stop
+
+        kl_ic_weight = 1.0
+        kl_co_weight = 1.0
+        
+        nepoch = -1
+        while True:
+            nepoch += 1
+            do_save_ckpt = True if nepoch % 10 ==0 else False
+            tr_total_cost, tr_recon_cost, tr_kl_cost = \
+                self.train_epoch(datasets, do_save_ckpt=do_save_ckpt,
+                                 kl_ic_weight = kl_ic_weight,
+                                 kl_co_weight = kl_co_weight)
+
+            val_total_cost, val_recon_cost, val_kl_cost = \
+                self.valid_epoch(datasets,
+                                 kl_ic_weight = kl_ic_weight,
+                                 kl_co_weight = kl_co_weight)
+
+            train_step = session.run(self.train_step)
+            print("Epoch:%d, step:%d (TRAIN, VALID): total: %.2f, %.2f\
+            recon: %.2f, %.2f,     kl: %.2f, %.2f, kl weight: %.2f" % \
+                  (nepoch, train_step, tr_total_cost, val_total_cost,
+                   tr_recon_cost, val_recon_cost, tr_kl_cost, val_kl_cost,
+                   kl_ic_weight))
+            
+    

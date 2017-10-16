@@ -139,3 +139,19 @@ def write_data(data_fname, data_dict, use_json=False, compression=None):
       raise
 
 
+def clean_data_dict(data_dict):
+  """Add some key/value pairs to the data dict, if they are missing.
+  Args:
+    data_dict - dictionary containing data for LFADS
+  Returns:
+    data_dict with some keys filled in, if they are absent.
+  """
+
+  keys = ['train_truth', 'train_ext_input', 'valid_data',
+          'valid_truth', 'valid_ext_input', 'valid_train']
+  for k in keys:
+    if k not in data_dict:
+      data_dict[k] = None
+
+  return data_dict
+
