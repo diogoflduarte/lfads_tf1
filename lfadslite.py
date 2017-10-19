@@ -55,6 +55,7 @@ class LFADS(object):
                 state_dim = hps['ic_enc_dim'],
                 batch_size = hps['batch_size'],
                 name = 'ic_enc',
+                sequence_lengths = np.zeros(hps['batch_size']) + hps['num_steps'],
                 cell = ic_enc_cell,
                 inputs = self.dataset_ph,
                 initial_state = None,
@@ -91,6 +92,7 @@ class LFADS(object):
                 self.gen_rnn_obj = DynamicRNN(state_dim = hps['gen_dim'],
                                               batch_size = hps['batch_size'],
                                               name = 'gen',
+                                              sequence_lengths = np.zeros(hps['batch_size']) + hps['num_steps'],
                                               cell = gen_cell,
                                               inputs = None,
                                               initial_state = self.g0,
@@ -116,6 +118,7 @@ class LFADS(object):
                     state_dim = hps['ci_enc_dim'],
                     batch_size = hps['batch_size'],
                     name = 'ci_enc',
+                    sequence_lengths = np.zeros(hps['batch_size']) + hps['num_steps'],
                     cell = ci_enc_cell,
                     inputs = self.dataset_ph,
                     initial_state = None,
@@ -473,28 +476,48 @@ class LFADS(object):
         lr = session.run(self.learning_rate)
         lr_stop = hps.learning_rate_stop
 
-        kl_ic_weight = 1.0
-        kl_co_weight = 1.0
-        
         nepoch = -1
+
+        name=datasets.keys()[0]
+        print name
+        data_dict = datasets[name]
+        data_extxd = data_dict["train_data"]
+        this_batch = data_extxd[0:hps['batch_size'],:,:]
+        feed_dict = {}
+        feed_dict[self.dataName] = name
+        feed_dict[self.dataset_ph] = this_batch
+        feed_dict[self.kl_ic_weight] = hps['kl_ic_weight']
+        feed_dict[self.kl_co_weight] = hps['kl_co_weight']
+        feed_dict[self.run_type] = kind_dict("train")
+        feed_dict[self.keep_prob] = 1.0
+
         while True:
             nepoch += 1
             do_save_ckpt = True if nepoch % 10 ==0 else False
+            start_time = time.time()
             tr_total_cost, tr_recon_cost, tr_kl_cost = \
                 self.train_epoch(datasets, do_save_ckpt=do_save_ckpt,
-                                 kl_ic_weight = kl_ic_weight,
-                                 kl_co_weight = kl_co_weight)
-
+                                 kl_ic_weight = hps['kl_ic_weight'],
+                                 kl_co_weight = hps['kl_co_weight'])
+            epoch_time = time.time() - start_time
             val_total_cost, val_recon_cost, val_kl_cost = \
                 self.valid_epoch(datasets,
-                                 kl_ic_weight = kl_ic_weight,
-                                 kl_co_weight = kl_co_weight)
+                                 kl_ic_weight = hps['kl_ic_weight'],
+                                 kl_co_weight = hps['kl_co_weight'])
 
             train_step = session.run(self.train_step)
             print("Epoch:%d, step:%d (TRAIN, VALID): total: %.2f, %.2f\
             recon: %.2f, %.2f,     kl: %.2f, %.2f, kl weight: %.2f" % \
                   (nepoch, train_step, tr_total_cost, val_total_cost,
                    tr_recon_cost, val_recon_cost, tr_kl_cost, val_kl_cost,
-                   kl_ic_weight))
-            
+                   hps['kl_ic_weight']))
+            print("Elapsed time: %f" %epoch_time)
     
+
+            import random
+            plotind = random.randint(0, hps['batch_size']-1)
+            ops_to_eval = [self.rates]
+            output = session.run(ops_to_eval, feed_dict)
+            plt = plot_data(this_batch[plotind,:,:], output[0][plotind,:,:])
+            if nepoch % 15 == 0:
+                close_all_plots()

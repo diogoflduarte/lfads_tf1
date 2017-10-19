@@ -109,7 +109,7 @@ def makeInitialState(state_dim, batch_size, name):
 
 
 class BidirectionalDynamicRNN(object):
-    def __init__(self, state_dim, batch_size, name, sequence_lengths=None,
+    def __init__(self, state_dim, batch_size, name, sequence_lengths,
                  cell = None, inputs = None, initial_state=None, rnn_type='gru',
                  output_size=None, output_keep_prob=1.0, input_keep_prob=1.0):
 
@@ -204,7 +204,7 @@ class BidirectionalDynamicRNN(object):
 
 
 class DynamicRNN(object):
-    def __init__(self, state_dim, batch_size, name, sequence_lengths = None,
+    def __init__(self, state_dim, batch_size, name, sequence_lengths,
                  cell = None, inputs = None, initial_state=None, rnn_type='gru',
                  output_size=None, output_size2=None, output_keep_prob=1.0,
                  input_keep_prob=1.0):
