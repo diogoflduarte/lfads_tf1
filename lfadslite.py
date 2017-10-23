@@ -491,6 +491,7 @@ class LFADS(object):
         feed_dict[self.run_type] = kind_dict("train")
         feed_dict[self.keep_prob] = 1.0
 
+        train_costs = []
         while True:
             nepoch += 1
             do_save_ckpt = True if nepoch % 10 ==0 else False
@@ -500,6 +501,7 @@ class LFADS(object):
                                  kl_ic_weight = hps['kl_ic_weight'],
                                  kl_co_weight = hps['kl_co_weight'])
             epoch_time = time.time() - start_time
+
             val_total_cost, val_recon_cost, val_kl_cost = \
                 self.valid_epoch(datasets,
                                  kl_ic_weight = hps['kl_ic_weight'],
@@ -511,7 +513,7 @@ class LFADS(object):
                   (nepoch, train_step, tr_total_cost, val_total_cost,
                    tr_recon_cost, val_recon_cost, tr_kl_cost, val_kl_cost,
                    hps['kl_ic_weight']))
-            print("Elapsed time: %f" %epoch_time)
+            #print("Elapsed time: %f" %epoch_time)
     
 
             import random
@@ -521,3 +523,19 @@ class LFADS(object):
             plt = plot_data(this_batch[plotind,:,:], output[0][plotind,:,:])
             if nepoch % 15 == 0:
                 close_all_plots()
+
+
+            # should we decrement learning rate?
+            n_lr = hps['learning_rate_n_to_compare']
+            if len(train_costs) > n_lr and tr_recon_cost > np.max(train_costs[-n_lr:]):
+                print("Decreasing learning rate")
+                self.run_learning_rate_decay_opt()
+
+            train_costs.append(tr_recon_cost)
+                
+            new_lr = self.get_learning_rate()
+            # should we stop?
+            if new_lr < hps['learning_rate_stop']:
+                print("Learning rate criteria met")
+                break
+                
