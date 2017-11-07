@@ -37,8 +37,10 @@ class LFADS(object):
         self.input_dim = hps['dataset_dims'][allsets[0]]
         #self.sequence_lengths = hps['sequence_lengths']
 
+        graph_batch_size = hps['batch_size']
+        
         with tf.variable_scope('placeholders'):
-            self.dataset_ph = tf.placeholder(tf.float32, shape = [hps['batch_size'], hps['num_steps'], self.input_dim], name='input_data')
+            self.dataset_ph = tf.placeholder(tf.float32, shape = [graph_batch_size, hps['num_steps'], self.input_dim], name='input_data')
             self.keep_prob = tf.placeholder(tf.float32, name='keep_prob')
             self.run_type = tf.placeholder(tf.int16, name='run_type')
             self.kl_ic_weight = tf.placeholder(tf.float32, name='kl_ic_weight')
@@ -48,14 +50,14 @@ class LFADS(object):
 
         with tf.variable_scope('ic_enc'):
             ic_enc_cell = CustomGRUCell(num_units = hps['ic_enc_dim'],\
-                                        batch_size = hps['batch_size'],
+                                        batch_size = graph_batch_size,
                                         clip_value = hps['cell_clip_value'])
             ## ic_encoder
             self.ic_enc_rnn_obj = BidirectionalDynamicRNN(
                 state_dim = hps['ic_enc_dim'],
-                batch_size = hps['batch_size'],
+                batch_size = graph_batch_size,
                 name = 'ic_enc',
-                sequence_lengths = np.zeros(hps['batch_size']) + hps['num_steps'],
+                sequence_lengths = np.zeros(graph_batch_size) + hps['num_steps'],
                 cell = ic_enc_cell,
                 inputs = self.dataset_ph,
                 initial_state = None,
@@ -86,13 +88,13 @@ class LFADS(object):
         if hps['co_dim'] ==0:
             with tf.variable_scope('generator'):
                 gen_cell = CustomGRUCell(num_units = hps['ic_enc_dim'],\
-                                            batch_size = hps['batch_size'],
+                                            batch_size = graph_batch_size,
                                             clip_value = hps['cell_clip_value'])
                 # setup generator
                 self.gen_rnn_obj = DynamicRNN(state_dim = hps['gen_dim'],
-                                              batch_size = hps['batch_size'],
+                                              batch_size = graph_batch_size,
                                               name = 'gen',
-                                              sequence_lengths = np.zeros(hps['batch_size']) + hps['num_steps'],
+                                              sequence_lengths = np.zeros(graph_batch_size) + hps['num_steps'],
                                               cell = gen_cell,
                                               inputs = None,
                                               initial_state = self.g0,
@@ -111,14 +113,14 @@ class LFADS(object):
             with tf.variable_scope('ci_enc'):
 
                 ci_enc_cell = CustomGRUCell(num_units = hps['ci_enc_dim'],\
-                                            batch_size = hps['batch_size'],
+                                            batch_size = graph_batch_size,
                                             clip_value = hps['cell_clip_value'])
                 ## ci_encoder
                 self.ci_enc_rnn_obj = BidirectionalDynamicRNN(
                     state_dim = hps['ci_enc_dim'],
-                    batch_size = hps['batch_size'],
+                    batch_size = graph_batch_size,
                     name = 'ci_enc',
-                    sequence_lengths = np.zeros(hps['batch_size']) + hps['num_steps'],
+                    sequence_lengths = np.zeros(graph_batch_size) + hps['num_steps'],
                     cell = ci_enc_cell,
                     inputs = self.dataset_ph,
                     initial_state = None,
@@ -163,16 +165,16 @@ class LFADS(object):
                 # the "complexcell" architecture requires an initial state definition
                 # have to define states for each of the components, then concatenate them
                 con_init_state = makeInitialState(hps['con_dim'],
-                                                  hps['batch_size'],
+                                                  graph_batch_size,
                                                   'controller')
                 co_mean_init_state = makeInitialState(hps['co_dim'],
-                                                      hps['batch_size'],
+                                                      graph_batch_size,
                                                       'controller_output_mean')
                 co_logvar_init_state = makeInitialState(hps['co_dim'],
-                                                        hps['batch_size'],
+                                                        graph_batch_size,
                                                         'controller_output_logvar')
                 fac_init_state = makeInitialState(hps['factors_dim'],
-                                                  hps['batch_size'],
+                                                  graph_batch_size,
                                                   'factor')
                 comcell_init_state = [con_init_state, self.g0,
                                            co_mean_init_state, co_logvar_init_state,
@@ -193,7 +195,7 @@ class LFADS(object):
                                              hps['co_dim'],
                                              hps['factors_dim'],
                                              hps['con_fac_in_dim'],
-                                             hps['batch_size'],
+                                             graph_batch_size,
                                              var_min = hps['co_post_var_min'],
                                              kind = self.run_type)
 
@@ -246,7 +248,7 @@ class LFADS(object):
         ## calculate the KL cost
         # g0 - build a prior distribution to compare to
         self.ics_prior = DiagonalGaussian(
-            z_size = [hps['batch_size'], hps['ic_dim']], name='ics_prior',
+            z_size = [graph_batch_size, hps['ic_dim']], name='ics_prior',
             var = hps['ic_prior_var'])
 
         # g0 KL cost for each trial
@@ -260,7 +262,7 @@ class LFADS(object):
             # if there are controller outputs, calculate a KL cost for them
             # first build a prior to compare to
             self.cos_prior = DiagonalGaussian(
-                z_size = [hps['batch_size'], hps['num_steps'], hps['co_dim']],
+                z_size = [graph_batch_size, hps['num_steps'], hps['co_dim']],
                 name='cos_prior', var = hps['co_prior_var'])
             # then build a posterior
             self.cos_posterior = DiagonalGaussianFromExisting(
@@ -285,7 +287,7 @@ class LFADS(object):
         # cost for each trial
         self.log_p_b = tf.reduce_sum(
             tf.reduce_sum(self.loglikelihood_b_t, [2] ), [1] )
-        # total rec cost
+        # total rec cost (avg over all trials in batch)
         self.log_p = tf.reduce_mean( self.log_p_b, [0])
         self.rec_cost = -self.log_p
 
@@ -558,15 +560,35 @@ class LFADS(object):
                                                self.hps.checkpoint_name + '_lve.ckpt')
                 self.lve_saver.save(session, checkpoint_path,
                                     global_step=self.train_step)
-                
             
+            kl_weight = hps['kl_ic_weight']
             train_step = session.run(self.train_step)
             print("Epoch:%d, step:%d (TRAIN, VALID): total: %.2f, %.2f\
             recon: %.2f, %.2f,     kl: %.2f, %.2f, kl weight: %.2f" % \
                   (nepoch, train_step, tr_total_cost, val_total_cost,
                    tr_recon_cost, val_recon_cost, tr_kl_cost, val_kl_cost,
-                   hps['kl_ic_weight']))
-    
+                   kl_weight))
+
+            #l2 has not been implemented yet
+            l2_cost = 0
+            l2_weight = 0
+
+            # TODO: write tensorboard summaries here...
+            
+            # write csv log file
+            if self.hps.csv_log:
+                # construct an output string
+                csv_outstr = "epoch,%d, step,%d, total,%.2f,%.2f, \
+                recon,%.2f,%.2f, kl,%.2f,%.2f, l2,%.5f, \
+                klweight,%.2f, l2weight,%.2f\n"% \
+                (nepoch, train_step, tr_total_cost, val_total_cost,
+                 tr_recon_cost, val_recon_cost, tr_kl_cost, val_kl_cost,
+                 l2_cost, kl_weight, l2_weight)
+                # log to file
+                csv_file = os.path.join(self.hps.lfads_save_dir, self.hps.csv_log+'.csv')
+                with open(csv_file, "a") as myfile:
+                    myfile.write(csv_outstr)
+
 
             import random
             plotind = random.randint(0, hps['batch_size']-1)
@@ -576,6 +598,7 @@ class LFADS(object):
             if nepoch % 15 == 0:
                 close_all_plots()
 
+                
 
             # should we decrement learning rate?
             n_lr = hps['learning_rate_n_to_compare']
