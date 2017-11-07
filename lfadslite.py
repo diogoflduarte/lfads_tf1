@@ -579,11 +579,12 @@ class LFADS(object):
 
             # should we decrement learning rate?
             n_lr = hps['learning_rate_n_to_compare']
-            if len(train_costs) > n_lr and tr_recon_cost > np.max(train_costs[-n_lr:]):
+            train_cost_to_use = tr_total_cost
+            if len(train_costs) > n_lr and train_cost_to_use > np.max(train_costs[-n_lr:]):
                 print("Decreasing learning rate")
                 self.run_learning_rate_decay_opt()
 
-            train_costs.append(tr_recon_cost)
+            train_costs.append(train_cost_to_use)
                 
             new_lr = self.get_learning_rate()
             # should we stop?
