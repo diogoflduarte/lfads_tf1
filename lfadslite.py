@@ -8,7 +8,7 @@ import os
 # utils defined by CP
 from helper_funcs import linear, init_linear_transform, makeInitialState
 from helper_funcs import ListOfRandomBatches, kind_dict
-from helper_funcs import DiagonalGaussianFromInput, DiagonalGaussian, DiagonalGaussianFromExisting
+from helper_funcs import DiagonalGaussianFromInput, DiagonalGaussian, DiagonalGaussianFromExisting, diag_gaussian_log_likelihood
 from helper_funcs import BidirectionalDynamicRNN, DynamicRNN, LinearTimeVarying
 from helper_funcs import KLCost_GaussianGaussian, Poisson
 from plot_funcs import plot_data, close_all_plots
@@ -205,22 +205,41 @@ class LFADS(object):
                                   initial_state = self.complexcell_init_state,
                                   time_major=False)
 
+                # split the states of the individual RNNs
+                # from the packed "complexcell" state
                 self.con_states, self.gen_states, self.co_mean_states, self.co_logvar_states, self.fac_states =\
                 tf.split(self.complex_outputs,
                          self.comcell_state_dims,
                          axis=2)
 
+
         # now back to code that runs for all models
         with tf.variable_scope('rates'):
             ## rates
+            if hps.output_dist.lower() == 'poisson':
+                nonlin = 'exp'
+                output_size = self.input_dim
+            elif hps.output_dist.lower() == 'gaussian':
+                nonlin = None
+                output_size = self.input_dim * 2
+            else:
+                raise NameError("Unknown output distribution: " + hps.output_dist)
+                
             rates_object = LinearTimeVarying(inputs = self.fac_states,
-                                           output_size = self.input_dim,
-                                           transform_name = 'factors_2_rates',
-                                           output_name = 'rates_concat',
-                                           nonlinearity = 'exp')
-            # get both the pre-exponentiated and exponentiated versions
-            self.logrates=rates_object.output
-            self.rates=rates_object.output_nl
+                                             output_size = output_size,
+                                             transform_name = 'factors_2_rates',
+                                             output_name = 'rates_concat',
+                                             nonlinearity = nonlin)
+            
+            if hps.output_dist.lower() == 'poisson':
+                # get both the pre-exponentiated and exponentiated versions
+                self.logrates=rates_object.output
+                self.output_dist=rates_object.output_nl
+            elif hps.output_dist.lower() == 'gaussian':
+                # get linear outputs, split into mean and variance
+                self.output_mean, self.output_logvar = tf.split(rates_object.output,
+                                                                2, axis=2)
+                self.output_dist=rates_object.output
 
 
 
@@ -257,7 +276,12 @@ class LFADS(object):
             self.kl_cost += self.kl_cost_co * self.kl_co_weight
 
         ## calculate reconstruction cost
-        self.loglikelihood_b_t = Poisson(self.logrates).logp(self.dataset_ph)
+        if hps.output_dist.lower() == 'poisson':
+            self.loglikelihood_b_t = Poisson(self.logrates).logp(self.dataset_ph)
+        if hps.output_dist.lower() == 'gaussian':
+            self.loglikelihood_b_t = diag_gaussian_log_likelihood(self.dataset_ph,
+                                         self.output_mean, self.output_logvar)
+            
         # cost for each trial
         self.log_p_b = tf.reduce_sum(
             tf.reduce_sum(self.loglikelihood_b_t, [2] ), [1] )
@@ -295,6 +319,23 @@ class LFADS(object):
         
 
         self.hps = hps
+
+
+        print("Model Variables (to be optimized): ")
+        total_params = 0
+        tvars = self.trainable_vars
+        for i in range(len(tvars)):
+            shape = tvars[i].get_shape().as_list()
+            print("    ", i, tvars[i].name, shape)
+            total_params += np.prod(shape)
+        print("Total model parameters: ", total_params)
+
+        
+        self.merged_generic = tf.summary.merge_all() # default key is 'summaries'
+        session = tf.get_default_session()
+        self.logfile = os.path.join(hps.lfads_save_dir, "lfads_log")
+        self.writer = tf.summary.FileWriter(self.logfile, session.graph)
+        
 
     ## functions to interface with the outside world
     def build_feed_dict(self, train_name, data_bxtxd, run_type = None,
@@ -375,7 +416,6 @@ class LFADS(object):
     def train_epoch(self, datasets, do_save_ckpt, kl_ic_weight, kl_co_weight):
         collected_op_values = self.run_epoch(datasets, kl_ic_weight,
                                              kl_co_weight, "train")
-
         if do_save_ckpt:
           session = tf.get_default_session()
           checkpoint_path = os.path.join(self.hps.lfads_save_dir,
@@ -383,6 +423,9 @@ class LFADS(object):
           self.seso_saver.save(session, checkpoint_path,
                                global_step=self.train_step)
 
+        #generic_summ = session.run(self.merged_generic, feed_dict=feed_dict)
+        #self.writer.add_summary(generic_summ, train_step)
+        
         return collected_op_values
 
     def valid_epoch(self, datasets, kl_ic_weight, kl_co_weight):
@@ -431,7 +474,7 @@ class LFADS(object):
     def train_batch(self, dict_from_py):
         session = tf.get_default_session()
         ops_to_eval = [self.train_op, self.total_cost, self.rec_cost, \
-                             self.kl_cost, self.rates, self.learning_rate]
+                             self.kl_cost, self.output_dist, self.learning_rate]
         feed_dict = {self.dataset_ph: dict_from_py['dataset_ph'],
                      self.keep_prob: dict_from_py['keep_prob'],
                      self.run_type: kind_dict("train")}
@@ -492,6 +535,7 @@ class LFADS(object):
         feed_dict[self.keep_prob] = 1.0
 
         train_costs = []
+        lve = float('Inf')
         while True:
             nepoch += 1
             do_save_ckpt = True if nepoch % 10 ==0 else False
@@ -501,24 +545,32 @@ class LFADS(object):
                                  kl_ic_weight = hps['kl_ic_weight'],
                                  kl_co_weight = hps['kl_co_weight'])
             epoch_time = time.time() - start_time
+            print("Elapsed time: %f" %epoch_time)
 
             val_total_cost, val_recon_cost, val_kl_cost = \
                 self.valid_epoch(datasets,
                                  kl_ic_weight = hps['kl_ic_weight'],
                                  kl_co_weight = hps['kl_co_weight'])
-
+            if val_recon_cost < lve:
+                # new lowest validation error
+                lve = val_recon_cost
+                checkpoint_path = os.path.join(self.hps.lfads_save_dir,
+                                               self.hps.checkpoint_name + '_lve.ckpt')
+                self.lve_saver.save(session, checkpoint_path,
+                                    global_step=self.train_step)
+                
+            
             train_step = session.run(self.train_step)
             print("Epoch:%d, step:%d (TRAIN, VALID): total: %.2f, %.2f\
             recon: %.2f, %.2f,     kl: %.2f, %.2f, kl weight: %.2f" % \
                   (nepoch, train_step, tr_total_cost, val_total_cost,
                    tr_recon_cost, val_recon_cost, tr_kl_cost, val_kl_cost,
                    hps['kl_ic_weight']))
-            #print("Elapsed time: %f" %epoch_time)
     
 
             import random
             plotind = random.randint(0, hps['batch_size']-1)
-            ops_to_eval = [self.rates]
+            ops_to_eval = [self.output_dist]
             output = session.run(ops_to_eval, feed_dict)
             plt = plot_data(this_batch[plotind,:,:], output[0][plotind,:,:])
             if nepoch % 15 == 0:

@@ -65,6 +65,24 @@ class Gaussian(object):
     def sample(self):
         return self.mean + tf.exp(0.5 * self.logvar) * self.noise()
 
+def diag_gaussian_log_likelihood(z, mu=0.0, logvar=0.0):
+  """Log-likelihood under a Gaussian distribution with diagonal covariance.
+    Returns the log-likelihood for each dimension.  One should sum the
+    results for the log-likelihood under the full multidimensional model.
+
+  Args:
+    z: The value to compute the log-likelihood.
+    mu: The mean of the Gaussian
+    logvar: The log variance of the Gaussian.
+
+  Returns:
+    The log-likelihood under the Gaussian model.
+  """
+
+  return -0.5 * (logvar + np.log(2*np.pi) + \
+                 tf.square((z-mu)/tf.exp(0.5*logvar)))
+
+
 class DiagonalGaussianFromExisting(Gaussian):
     """Diagonal Gaussian with different constant mean and variances in each
     dimension.
@@ -269,7 +287,6 @@ class DynamicRNN(object):
         if inputs is None:
             inputs = tf.zeros( [batch_size, max(sequence_lengths), 1],
                                dtype=tf.float32)
-            print inputs
         # call dynamic_rnn
         self.states, self.last = tf.nn.dynamic_rnn(
             cell = self.cell,
@@ -285,24 +302,57 @@ class LinearTimeVarying(object):
     # self.output_nl = nonlinear transform
     
     def __init__(self, inputs, output_size, transform_name, output_name, nonlinearity = None ):
-        tensor_shape = inputs.get_shape()
-        input_size = int(tensor_shape[2])
+        num_timesteps = tf.shape(inputs)[1]
+        # must return "as_list" to get ints
+        input_size = inputs.get_shape().as_list()[2]
         outputs = []
         outputs_nl = []
         self.W,self.b = init_linear_transform(input_size, output_size, name=transform_name)
-        for step_index in range(tensor_shape[1]):
-            gred = inputs[:, step_index, :]
-            fout = tf.matmul(gred, self.W) + self.b
-            # add a leading dimension for concatenating later
-            outputs.append( tf.expand_dims( fout , 1) )
+
+        inputs_permuted = tf.transpose(inputs, perm=[1, 0, 2])
+        initial_outputs = tf.TensorArray(dtype=tf.float32, size=num_timesteps, name='init_linear_outputs')
+        initial_outputs_nl = tf.TensorArray(dtype=tf.float32, size=num_timesteps, name='init_nl_outputs')
+        
+        # keep going until the number of timesteps
+        def condition(t, *args):
+            return t < num_timesteps
+
+        def iteration(t_, output_, output_nl_):
+            # apply linear transform to input at this timestep
+            ## cur = tf.gather(inputs, t, axis=1)
+            # axis is not supported in 'gather' until 1.3
+            #cur = tf.gather(inputs_permuted, t)
+            cur = inputs_permuted[t_,:,:]
+            output_this_step = tf.matmul(cur, self.W) + self.b
+            output_ = output_.write(t_, output_this_step)
             if nonlinearity is 'exp':
-                nlout = tf.exp(fout)
-                # add a leading dimension for concatenating later
-                outputs_nl.append( tf.expand_dims( nlout , 1) )
+                output_nl_ = output_nl_.write(t_, tf.exp(output_this_step) )
+            return t_+1, output_, output_nl_
+
+        i = tf.constant(0)
+        t, output, output_nl = tf.while_loop(condition, iteration, \
+                                             [i, initial_outputs, initial_outputs_nl])
+        
+        self.output= tf.transpose( output.stack(), perm=[1, 0, 2])
+        self.output_nl= tf.transpose( output_nl.stack(), perm=[1, 0, 2])
+
+
+        ## this is old code for the linear time varying transform
+        # was replaced by the above tf.while_loop
+        
+        #for step_index in range(tensor_shape[1]):
+        #    gred = inputs[:, step_index, :]
+        #    fout = tf.matmul(gred, self.W) + self.b
+        #    # add a leading dimension for concatenating later
+        #    outputs.append( tf.expand_dims( fout , 1) )
+        #    if nonlinearity is 'exp':
+        #        nlout = tf.exp(fout)
+        #        # add a leading dimension for concatenating later
+        #        outputs_nl.append( tf.expand_dims( nlout , 1) )
         # concatenate the created list into the factors
-        self.output = tf.concat(outputs, axis=1, name=output_name)
-        if nonlinearity is 'exp':
-            self.output_nl = tf.concat(outputs_nl, axis=1, name=output_name)
+        #self.output = tf.concat(outputs, axis=1, name=output_name)
+        #if nonlinearity is 'exp':
+        #    self.output_nl = tf.concat(outputs_nl, axis=1, name=output_name)
         
 
 
