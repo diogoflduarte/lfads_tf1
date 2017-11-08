@@ -1,19 +1,73 @@
 import numpy as np
 import tensorflow as tf
 import os
+import h5py
+import json
 
 
-def kind_dict(kind):
+def kind_dict_definition():
+# used in the graph's keep probability
     return {
         'train': 1,
         'posterior_sample_and_average': 2,
         'posterior_mean': 3,
         'prior_sample': 4,
         'write_model_params': 5,
-        }[kind]
+        }    
+
+def kind_dict(kind_str):
+# used in the graph's keep probability
+    kd = kind_dict_definition()
+    return kd[kind_str]
+
+def kind_dict_key(kind_number):
+# get the key for a certain ind
+    kd = kind_dict_definition()
+    for key, val in kd.iteritems():
+            if val == kind_number:
+                return key
+
+            
+def write_data(data_fname, data_dict, use_json=False, compression=None):
+  """Write data in HDF5 format.
+
+  Args:
+    data_fname: The filename of teh file in which to write the data.
+    data_dict:  The dictionary of data to write. The keys are strings
+      and the values are numpy arrays.
+    use_json (optional): human readable format for simple items
+    compression (optional): The compression to use for h5py (disabled by
+      default because the library borks on scalars, otherwise try 'gzip').
+  """
+
+  dir_name = os.path.dirname(data_fname)
+  if not os.path.exists(dir_name):
+    os.makedirs(dir_name)
+
+  if use_json:
+    the_file = open(data_fname,'w')
+    json.dump(data_dict, the_file)
+    the_file.close()
+  else:
+    try:
+      with h5py.File(data_fname, 'w') as hf:
+        for k, v in data_dict.items():
+          clean_k = k.replace('/', '_')
+          if clean_k is not k:
+            print('Warning: saving variable with name: ', k, ' as ', clean_k)
+          else:
+            print('Saving variable with name: ', clean_k)
+          hf.create_dataset(clean_k, data=v, compression=compression)
+    except IOError:
+      print("Cannot open %s for writing.", data_fname)
+      raise
+
 
 
 def init_linear_transform(in_size, out_size, name=None):
+# generic function (we use linear transforms in a lot of places)
+# initialize the weights of the linear transformation based on the size of the inputs
+    
     # initialze with a random distribuion
     stddev = 1/np.sqrt(float(in_size))
     mat_init = tf.random_normal_initializer(0.0, stddev, dtype=tf.float32)
@@ -32,6 +86,8 @@ def init_linear_transform(in_size, out_size, name=None):
 
 
 def linear(x, out_size, name):
+# generic function (we use linear transforms in a lot of places)
+# initialize the weights of the linear transformation based on the size of the inputs
     in_size = int(x.get_shape()[1])
     W,b = init_linear_transform(in_size, out_size, name=name)
     return tf.matmul(x, W) + b

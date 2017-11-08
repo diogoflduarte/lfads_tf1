@@ -10,7 +10,7 @@ import re
 import data_funcs as utils
 
 #lfadslite
-from helper_funcs import kind_dict
+from helper_funcs import kind_dict, kind_dict_key
 
 
 ## need to implement:
@@ -482,10 +482,14 @@ def write_model_samples(hps, datasets, dataset_name=None, output_fname=None):
     output_fname: The name prefix of the file in which to save the generated
       samples.
   """
+
+  # get kind_dict keys
+  kind_str = kind_dict_key(hps.kind)
+  
   if not output_fname:
-    output_fname = "model_runs_" + hps.kind
+    output_fname = "model_runs_" + kind_str
   else:
-    output_fname = output_fname + "model_runs_" + hps.kind
+    output_fname = output_fname + "model_runs_" + kind_str
   if not dataset_name:
     dataset_name = datasets.keys()[0]
   else:

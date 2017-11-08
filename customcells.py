@@ -77,13 +77,13 @@ class ComplexCell(tf.nn.rnn_cell.RNNCell):
         self._kind = kind
         self._clip_value = clip_value
 
-        # note that there are 2x co_dim
-        # because it has mean and logvar params
+        # note that there are 3x co_dim
+        # because it has mean and logvar params, and samples
         self._num_units_tot = self._num_units_con + \
-                              self._num_units_gen + 2*self._co_dim + self._factors_dim
+                              self._num_units_gen + 3*self._co_dim + self._factors_dim
         self._output_size = self._num_units_tot
         self._state_size = self._num_units_con + \
-                           self._num_units_gen + 2*self._co_dim + self._factors_dim
+                           self._num_units_gen + 3*self._co_dim + self._factors_dim
         self._noise_bxn = tf.random_normal([batch_size, self._co_dim])
         
     @property
@@ -102,9 +102,10 @@ class ComplexCell(tf.nn.rnn_cell.RNNCell):
             # get the inputs
             con_i = inputs
             # split the state
-            con_s, gen_s, co_mean_s, co_logvar_s, fac_s = \
+            con_s, gen_s, co_mean_s, co_logvar_s, co_prev_out, fac_s = \
                             tf.split(state, [self._num_units_con,
                                              self._num_units_gen,
+                                             self._co_dim,
                                              self._co_dim,
                                              self._co_dim,
                                              self._factors_dim],
@@ -171,7 +172,7 @@ class ComplexCell(tf.nn.rnn_cell.RNNCell):
                 fac_new_h = linear(gen_new_h, self._factors_dim,
                                    name = "gen_2_fac_transform")
 
-            values = [con_new_h, gen_new_h, co_mean_new_h, co_logvar_new_h, fac_new_h]
+            values = [con_new_h, gen_new_h, co_mean_new_h, co_logvar_new_h, co_out, fac_new_h]
             new_h = tf.concat(axis=1, values=values)
 
             # add a clip to prevent crazy gradients / nan-ing out

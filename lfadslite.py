@@ -3,14 +3,16 @@ import numpy as np
 import sys
 import time
 import os
+import random
 
 
 # utils defined by CP
 from helper_funcs import linear, init_linear_transform, makeInitialState
-from helper_funcs import ListOfRandomBatches, kind_dict
+from helper_funcs import ListOfRandomBatches, kind_dict, kind_dict_key
 from helper_funcs import DiagonalGaussianFromInput, DiagonalGaussian, DiagonalGaussianFromExisting, diag_gaussian_log_likelihood
 from helper_funcs import BidirectionalDynamicRNN, DynamicRNN, LinearTimeVarying
 from helper_funcs import KLCost_GaussianGaussian, Poisson
+from helper_funcs import write_data
 from plot_funcs import plot_data, close_all_plots
 from data_funcs import read_datasets
 from customcells import ComplexCell
@@ -24,24 +26,36 @@ from customcells import CustomGRUCell
 class LFADS(object):
 
     def __init__(self, hps, datasets = None):
-#        tf.reset_default_graph();
-
+    # build the graph
+        
+        # set the learning rate, defaults to the hyperparam setting
+        # TODO: test if this properly re-initializes learning rate when loading a new model
         self.learning_rate = tf.Variable(float(hps['learning_rate_init']), trainable=False, name="learning_rate")
+
+        # this is how the learning rate is decayed over time
         self.learning_rate_decay_op = self.learning_rate.assign(\
             self.learning_rate * hps['learning_rate_decay_factor'])
 
 
         ### BEGIN MODEL CONSTRUCTION
 
+        # figure out the input (dataset) dimensionality
+        # TODO: adjust so this can handle multiple datasets
         allsets = hps['dataset_dims'].keys()
         self.input_dim = hps['dataset_dims'][allsets[0]]
-        #self.sequence_lengths = hps['sequence_lengths']
 
+        # everybody uses this variable to get the batch size
+        # in the future, this could be dynamic 
         graph_batch_size = hps['batch_size']
-        
+
+        # define all placeholders
         with tf.variable_scope('placeholders'):
+            # input data (what are we training on)
             self.dataset_ph = tf.placeholder(tf.float32, shape = [graph_batch_size, hps['num_steps'], self.input_dim], name='input_data')
+            # dropout keep probability
+            #   enumerated in helper_funcs.kind_dict
             self.keep_prob = tf.placeholder(tf.float32, name='keep_prob')
+            
             self.run_type = tf.placeholder(tf.int16, name='run_type')
             self.kl_ic_weight = tf.placeholder(tf.float32, name='kl_ic_weight')
             self.kl_co_weight = tf.placeholder(tf.float32, name='kl_co_weight')
@@ -65,21 +79,22 @@ class LFADS(object):
                 output_keep_prob = self.keep_prob)
 
             # map the ic_encoder onto the actual ic layer
-            self.ics_posterior = DiagonalGaussianFromInput(
+            self.gen_ics_posterior = DiagonalGaussianFromInput(
                 x = self.ic_enc_rnn_obj.last_tot,
                 z_size = hps['ic_dim'],
                 name = 'ic_enc_2_ics',
                 var_min = hps['ic_post_var_min'],
             )
+            self.posterior_zs_g0 = self.gen_ics_posterior
 
         # to go forward, either sample from the posterior, or take mean
         #     (depending on current usage)
         if self.run_type in [kind_dict("train"), kind_dict("posterior_sample_and_average")]:
-            self.ics = self.ics_posterior.sample()
+            self.gen_ics_lowd = self.gen_ics_posterior.sample()
         else:
-            self.ics = self.ics_posterior.mean
+            self.gen_ics_lowd = self.gen_ics_posterior.mean
         with tf.variable_scope('generator'):
-            self.g0 = linear(self.ics, hps['gen_dim'], name='ics_2_g0')
+            self.gen_ics = linear(self.gen_ics_lowd, hps['gen_dim'], name='ics_2_g0')
 
 
         ### CONTROLLER construction
@@ -97,7 +112,7 @@ class LFADS(object):
                                               sequence_lengths = np.zeros(graph_batch_size) + hps['num_steps'],
                                               cell = gen_cell,
                                               inputs = None,
-                                              initial_state = self.g0,
+                                              initial_state = self.gen_ics,
                                               rnn_type = 'customgru',
                                               output_keep_prob = self.keep_prob)
             with tf.variable_scope('factors'):
@@ -108,7 +123,7 @@ class LFADS(object):
                                                     transform_name = 'gen_2_factors',
                                                     output_name = 'factors_concat',
                                                  )
-                self.fac_states = self.fac_obj.output
+                self.factors = self.fac_obj.output
         else:
             with tf.variable_scope('ci_enc'):
 
@@ -173,12 +188,15 @@ class LFADS(object):
                 co_logvar_init_state = makeInitialState(hps['co_dim'],
                                                         graph_batch_size,
                                                         'controller_output_logvar')
+                co_sample_init_state = makeInitialState(hps['co_dim'],
+                                                        graph_batch_size,
+                                                        'controller_output_sample')
                 fac_init_state = makeInitialState(hps['factors_dim'],
                                                   graph_batch_size,
                                                   'factor')
-                comcell_init_state = [con_init_state, self.g0,
+                comcell_init_state = [con_init_state, self.gen_ics,
                                            co_mean_init_state, co_logvar_init_state,
-                                           fac_init_state]
+                                           co_sample_init_state, fac_init_state]
                 self.complexcell_init_state = tf.concat(axis=1, values = comcell_init_state)
 
 
@@ -187,6 +205,7 @@ class LFADS(object):
                                            hps['gen_dim'],
                                            hps['co_dim'], # for the controller output means
                                            hps['co_dim'], # for the variances
+                                           hps['co_dim'], # for the sampled controller output
                                            hps['factors_dim']]
 
                 # construct the complexcell
@@ -209,15 +228,14 @@ class LFADS(object):
 
                 # split the states of the individual RNNs
                 # from the packed "complexcell" state
-                self.con_states, self.gen_states, self.co_mean_states, self.co_logvar_states, self.fac_states =\
+                self.con_states, self.gen_states, self.co_mean_states, self.co_logvar_states, self.controller_outputs, self.factors =\
                 tf.split(self.complex_outputs,
                          self.comcell_state_dims,
                          axis=2)
 
-
         # now back to code that runs for all models
         with tf.variable_scope('rates'):
-            ## rates
+            ## "rates" - more properly called "output_distribution"
             if hps.output_dist.lower() == 'poisson':
                 nonlin = 'exp'
                 output_size = self.input_dim
@@ -227,33 +245,35 @@ class LFADS(object):
             else:
                 raise NameError("Unknown output distribution: " + hps.output_dist)
                 
-            rates_object = LinearTimeVarying(inputs = self.fac_states,
+            # rates are taken as a linear (or nonlinear) readout from the factors
+            rates_object = LinearTimeVarying(inputs = self.factors,
                                              output_size = output_size,
                                              transform_name = 'factors_2_rates',
                                              output_name = 'rates_concat',
                                              nonlinearity = nonlin)
-            
+
+            # select the relevant part of the output depending on model type
             if hps.output_dist.lower() == 'poisson':
                 # get both the pre-exponentiated and exponentiated versions
                 self.logrates=rates_object.output
-                self.output_dist=rates_object.output_nl
+                self.output_dist_params=rates_object.output_nl
             elif hps.output_dist.lower() == 'gaussian':
                 # get linear outputs, split into mean and variance
                 self.output_mean, self.output_logvar = tf.split(rates_object.output,
                                                                 2, axis=2)
-                self.output_dist=rates_object.output
-
+                self.output_dist_params=rates_object.output
 
 
         ## calculate the KL cost
         # g0 - build a prior distribution to compare to
-        self.ics_prior = DiagonalGaussian(
-            z_size = [graph_batch_size, hps['ic_dim']], name='ics_prior',
+        self.gen_ics_prior = DiagonalGaussian(
+            z_size = [graph_batch_size, hps['ic_dim']], name='gen_ics_prior',
             var = hps['ic_prior_var'])
-
+        self.prior_zs_g0 = self.gen_ics_prior
+        
         # g0 KL cost for each trial
-        self.kl_cost_g0_b = KLCost_GaussianGaussian(self.ics_posterior,
-                                                    self.ics_prior).kl_cost_b
+        self.kl_cost_g0_b = KLCost_GaussianGaussian(self.gen_ics_posterior,
+                                                    self.gen_ics_prior).kl_cost_b
         # g0 KL cost for the whole batch
         self.kl_cost_g0 = tf.reduce_mean(self.kl_cost_g0_b)
         # total KL cost
@@ -301,6 +321,7 @@ class LFADS(object):
                                                 tf.clip_by_global_norm(
                                                     self.gradients, \
                                                     hps['max_grad_norm'])
+        # this is the optimizer
         self.opt = tf.train.AdamOptimizer(self.learning_rate, beta1=0.9, beta2=0.999,
                                      epsilon=1e-01)
 
@@ -311,15 +332,16 @@ class LFADS(object):
         self.train_op = self.opt.apply_gradients(
             zip(self.gradients, self.trainable_vars), global_step = self.train_step)
 
-        # hooks to save down model
+        # hooks to save down model checkpoints:
+        # "save every so often" (i.e., recent checkpoints)
         self.seso_saver = tf.train.Saver(tf.global_variables(),
                                      max_to_keep=hps.max_ckpt_to_keep)
 
-        # lowest validation error
+        # lowest validation error checkpoint
         self.lve_saver = tf.train.Saver(tf.global_variables(),
                                     max_to_keep=hps.max_ckpt_to_keep)
         
-
+        # store the hps
         self.hps = hps
 
 
@@ -328,7 +350,7 @@ class LFADS(object):
         tvars = self.trainable_vars
         for i in range(len(tvars)):
             shape = tvars[i].get_shape().as_list()
-            print("    ", i, tvars[i].name, shape)
+            print("- ", i, tvars[i].name, shape)
             total_params += np.prod(shape)
         print("Total model parameters: ", total_params)
 
@@ -337,8 +359,8 @@ class LFADS(object):
         session = tf.get_default_session()
         self.logfile = os.path.join(hps.lfads_save_dir, "lfads_log")
         self.writer = tf.summary.FileWriter(self.logfile, session.graph)
-        
 
+        
     ## functions to interface with the outside world
     def build_feed_dict(self, train_name, data_bxtxd, run_type = None,
                         keep_prob=None, kl_ic_weight=1.0, kl_co_weight=1.0):
@@ -355,6 +377,15 @@ class LFADS(object):
         with tf.Session.run()
 
       """
+      # CP: the following elements must be defined in a feed_dict for the graph to run
+      # (each is a placeholder in the graph)
+      #   self.dataName
+      #   self.dataset_ph
+      #   self.kl_ic_weight
+      #   self.kl_co_weight
+      #   self.run_type
+      #   self.keep_prob
+
       feed_dict = {}
       B, T, _ = data_bxtxd.shape
       feed_dict[self.dataName] = train_name
@@ -416,8 +447,12 @@ class LFADS(object):
 
 
     def train_epoch(self, datasets, do_save_ckpt, kl_ic_weight, kl_co_weight):
+    # train_epoch runs the entire training set once
+    #    (it is mostly a wrapper around "run_epoch")
+    # afterwards it saves a checkpoint if requested
         collected_op_values = self.run_epoch(datasets, kl_ic_weight,
                                              kl_co_weight, "train")
+    
         if do_save_ckpt:
           session = tf.get_default_session()
           checkpoint_path = os.path.join(self.hps.lfads_save_dir,
@@ -425,12 +460,11 @@ class LFADS(object):
           self.seso_saver.save(session, checkpoint_path,
                                global_step=self.train_step)
 
-        #generic_summ = session.run(self.merged_generic, feed_dict=feed_dict)
-        #self.writer.add_summary(generic_summ, train_step)
-        
         return collected_op_values
 
     def valid_epoch(self, datasets, kl_ic_weight, kl_co_weight):
+    # valid_epoch runs the entire validation set
+    #    (it is mostly a wrapper around "run_epoch")
         collected_op_values = self.run_epoch(datasets, kl_ic_weight,
                                              kl_co_weight, "valid")
         return collected_op_values
@@ -476,7 +510,7 @@ class LFADS(object):
     def train_batch(self, dict_from_py):
         session = tf.get_default_session()
         ops_to_eval = [self.train_op, self.total_cost, self.rec_cost, \
-                             self.kl_cost, self.output_dist, self.learning_rate]
+                             self.kl_cost, self.output_dist_params, self.learning_rate]
         feed_dict = {self.dataset_ph: dict_from_py['dataset_ph'],
                      self.keep_prob: dict_from_py['keep_prob'],
                      self.run_type: kind_dict("train")}
@@ -491,26 +525,23 @@ class LFADS(object):
                      self.run_type: kind_dict("train")}
         return session.run(ops_to_eval, feed_dict)
 
-    def get_controller_output(self, dict_from_py):
-        session = tf.get_default_session()
-        ops_to_eval = [self.co_mean_states]
-        feed_dict = {self.input_data: dict_from_py['input_data'],
-                     self.keep_prob: 1.0, # don't need to lower keep_prob for this
-                     self.run_type: kind_dict("train")}
-        return session.run(ops_to_eval, feed_dict)
-    
 
     def run_learning_rate_decay_opt(self):
+    # decay the learning rate 
         session = tf.get_default_session()
         session.run(self.learning_rate_decay_op)
 
     def get_learning_rate(self):
+    # return the current learning rate
         session = tf.get_default_session()
         return session.run(self.learning_rate)
 
 
     def train_model(self, datasets):
+    # this is the main loop for training a model
         hps = self.hps
+
+        # check to see if there are any validation datasets
         has_any_valid_set = False
         for data_dict in datasets.values():
           if data_dict['valid_data'] is not None:
@@ -518,23 +549,20 @@ class LFADS(object):
             break
 
         session = tf.get_default_session()
-        lr = session.run(self.learning_rate)
+
+        # monitor the learning rate
+        lr = self.get_learning_rate()
         lr_stop = hps.learning_rate_stop
 
+        # epoch counter
         nepoch = -1
 
+        # TODO: modify to work with multiple datasets
         name=datasets.keys()[0]
-        print name
+        
         data_dict = datasets[name]
         data_extxd = data_dict["train_data"]
         this_batch = data_extxd[0:hps['batch_size'],:,:]
-        feed_dict = {}
-        feed_dict[self.dataName] = name
-        feed_dict[self.dataset_ph] = this_batch
-        feed_dict[self.kl_ic_weight] = hps['kl_ic_weight']
-        feed_dict[self.kl_co_weight] = hps['kl_co_weight']
-        feed_dict[self.run_type] = kind_dict("train")
-        feed_dict[self.keep_prob] = 1.0
 
         train_costs = []
         lve = float('Inf')
@@ -590,13 +618,12 @@ class LFADS(object):
                     myfile.write(csv_outstr)
 
 
-            import random
-            plotind = random.randint(0, hps['batch_size']-1)
-            ops_to_eval = [self.output_dist]
-            output = session.run(ops_to_eval, feed_dict)
-            plt = plot_data(this_batch[plotind,:,:], output[0][plotind,:,:])
-            if nepoch % 15 == 0:
-                close_all_plots()
+            #plotind = random.randint(0, hps['batch_size']-1)
+            #ops_to_eval = [self.output_dist_params]
+            #output = session.run(ops_to_eval, feed_dict)
+            #plt = plot_data(this_batch[plotind,:,:], output[0][plotind,:,:])
+            #if nepoch % 15 == 0:
+            #    close_all_plots()
 
                 
 
@@ -614,4 +641,217 @@ class LFADS(object):
             if new_lr < hps['learning_rate_stop']:
                 print("Learning rate criteria met")
                 break
+
+
+    def eval_model_runs_batch(self, data_name, data_bxtxd,
+                              do_eval_cost=False, do_average_batch=False):
+        """Returns all the goodies for the entire model, per batch.
+
+        Args:
+          data_name: The name of the data dict, to select which in/out matrices
+            to use.
+          data_bxtxd:  Numpy array training data with shape:
+            batch_size x # time steps x # dimensions
+          ext_input_bxtxi: Numpy array training external input with shape:
+            batch_size x # time steps x # external input dims
+          do_eval_cost (optional): If true, the IWAE (Importance Weighted
+             Autoencoder) log likeihood bound, instead of the VAE version.
+          do_average_batch (optional): average over the batch, useful for getting
+          good IWAE costs, and model outputs for a single data point.
+
+        Returns:
+          A dictionary with the outputs of the model decoder, namely:
+            prior g0 mean, prior g0 variance, approx. posterior mean, approx
+            posterior mean, the generator initial conditions, the control inputs (if
+            enabled), the state of the generator, the factors, and the rates.
+        """
+        session = tf.get_default_session()
+        # kl_ic_weight and kl_co_weight do not matter for posterior sample and average
+        feed_dict = self.build_feed_dict(data_name, data_bxtxd, run_type=kind_dict('posterior_sample_and_average'),
+                                         keep_prob=1.0) 
+        # Non-temporal signals will be batch x dim.
+        # Temporal signals are list length T with elements batch x dim.
+        tf_vals = [self.gen_ics, self.gen_states, self.factors,
+                   self.output_dist_params]
+        if self.hps.ic_dim > 0:
+          tf_vals += [self.prior_zs_g0.mean, self.prior_zs_g0.logvar,
+                      self.posterior_zs_g0.mean, self.posterior_zs_g0.logvar]
+        if self.hps.co_dim > 0:
+          tf_vals.append(self.controller_outputs)
+
+        # flatten for sending into session.run
+        np_vals_flat = session.run(tf_vals, feed_dict=feed_dict)
+        return np_vals_flat
+    #        tf_vals_flat, fidxs = flatten(tf_vals)
+            
+    # this does the bulk of posterior sample & mean
+    def eval_model_runs_avg_epoch(self, data_name, data_extxd):
+        """Returns all the expected value for goodies for the entire model.
+
+        The expected value is taken over hidden (z) variables, namely the initial
+        conditions and the control inputs.  The expected value is approximate, and
+        accomplished via sampling (batch_size) samples for every examples.
+
+        Args:
+          data_name: The name of the data dict, to select which in/out matrices
+            to use.
+          data_extxd:  Numpy array training data with shape:
+            # examples x # time steps x # dimensions
+#          ext_input_extxi (optional): Numpy array training external input with
+#            shape: # examples x # time steps x # external input dims
+
+        Returns:
+          A dictionary with the averaged outputs of the model decoder, namely:
+            prior g0 mean, prior g0 variance, approx. posterior mean, approx
+            posterior mean, the generator initial conditions, the control inputs (if
+            enabled), the state of the generator, the factors, and the output
+            distribution parameters, e.g. (rates or mean and variances).
+        """
+        hps = self.hps
+        batch_size = hps.batch_size
+        E, T, D  = data_extxd.shape
+        E_to_process = hps.ps_nexamples_to_process
+        if E_to_process > E:
+          print("Setting number of posterior samples to process to : ", E)
+          E_to_process = E
+
+        # make a bunch of placeholders to store the posterior sample means
+        if hps.ic_dim > 0:
+            prior_g0_mean = np.zeros([E_to_process, hps.ic_dim])
+            prior_g0_logvar = np.zeros([E_to_process, hps.ic_dim])
+            post_g0_mean = np.zeros([E_to_process, hps.ic_dim])
+            post_g0_logvar = np.zeros([E_to_process, hps.ic_dim])
+
+        if hps.co_dim > 0:
+            controller_outputs = np.zeros([E_to_process, T, hps.co_dim])
+        gen_ics = np.zeros([E_to_process, hps.gen_dim])
+        gen_states = np.zeros([E_to_process, T, hps.gen_dim])
+        factors = np.zeros([E_to_process, T, hps.factors_dim])
+
+        if hps.output_dist == 'poisson':
+            out_dist_params = np.zeros([E_to_process, T, D])
+        elif hps.output_dist == 'gaussian':
+            out_dist_params = np.zeros([E_to_process, T, D+D])
+        else:
+            assert False, "NIY"
+
+        costs = np.zeros(E_to_process)
+        nll_bound_vaes = np.zeros(E_to_process)
+        nll_bound_iwaes = np.zeros(E_to_process)
+        train_steps = np.zeros(E_to_process)
+        for es_idx in range(E_to_process):
+            print("Running %d of %d." % (es_idx+1, E_to_process))
+            example_idxs = es_idx * np.ones(batch_size, dtype=np.int32)
+            data_bxtxd = data_extxd[example_idxs]
+            # run the model
+            mv = self.eval_model_runs_batch(data_name, data_bxtxd,
+                                            do_eval_cost=True,
+                                            do_average_batch=True)
+            # assemble a dict from the returns
+            model_values = {}
+            vars = ['gen_ics', 'gen_states', 'factors', 'output_dist_params']
+            if self.hps.ic_dim > 0:
+                vars.append('prior_g0_mean')
+                vars.append('prior_g0_logvar')
+                vars.append('post_g0_mean')
+                vars.append('post_g0_logvar')
+            if self.hps.co_dim > 0:
+                vars.append('controller_outputs')
+
+            for idx in range( len(vars) ):
+                model_values[ vars[idx] ] = np.mean(mv[idx], axis=0)
+
                 
+            #model_values['gen_ics'] = mv[idx]; idx += 1
+            #model_values['gen_states'] = mv[idx]; idx += 1
+            #model_values['factors'] = mv[idx]; idx += 1
+            #model_values['output_dist_params'] = mv[idx]; idx += 1
+            #if self.hps.ic_dim > 0:
+            #    model_values['prior_g0_mean'] = mv[idx]; idx += 1
+            #    model_values['prior_g0_logvar'] = mv[idx]; idx += 1
+            #    model_values['post_g0_mean'] = mv[idx]; idx += 1
+            #    model_values['post_g0_logvar'] = mv[idx]; idx += 1
+            #if self.hps.co_dim > 0:
+            #    model_values['controller_outputs'] = mv[idx]; idx += 1
+
+
+            # assign values to the arrays
+            if self.hps.ic_dim > 0:
+                prior_g0_mean[es_idx,:] = model_values['prior_g0_mean']
+                prior_g0_logvar[es_idx,:] = model_values['prior_g0_logvar']
+                post_g0_mean[es_idx,:] = model_values['post_g0_mean']
+                post_g0_logvar[es_idx,:] = model_values['post_g0_logvar']
+            gen_ics[es_idx,:] = model_values['gen_ics']
+
+            if self.hps.co_dim > 0:
+                controller_outputs[es_idx,:,:] = model_values['controller_outputs']
+            gen_states[es_idx,:,:] = model_values['gen_states']
+            factors[es_idx,:,:] = model_values['factors']
+            out_dist_params[es_idx,:,:] = model_values['output_dist_params']
+            
+            #costs[es_idx] = model_values['costs']
+            #nll_bound_vaes[es_idx] = model_values['nll_bound_vaes']
+            #nll_bound_iwaes[es_idx] = model_values['nll_bound_iwaes']
+            #train_steps[es_idx] = model_values['train_steps']
+            #print('bound nll(vae): %.3f, bound nll(iwae): %.3f' \
+            #      % (nll_bound_vaes[es_idx], nll_bound_iwaes[es_idx]))
+
+        model_runs = {}
+        if self.hps.ic_dim > 0:
+            model_runs['prior_g0_mean'] = prior_g0_mean
+            model_runs['prior_g0_logvar'] = prior_g0_logvar
+            model_runs['post_g0_mean'] = post_g0_mean
+            model_runs['post_g0_logvar'] = post_g0_logvar
+            model_runs['gen_ics'] = gen_ics
+
+        if self.hps.co_dim > 0:
+            model_runs['controller_outputs'] = controller_outputs
+        model_runs['gen_states'] = gen_states
+        model_runs['factors'] = factors
+        model_runs['output_dist_params'] = out_dist_params
+        model_runs['costs'] = costs
+        model_runs['nll_bound_vaes'] = nll_bound_vaes
+        model_runs['nll_bound_iwaes'] = nll_bound_iwaes
+        model_runs['train_steps'] = train_steps
+        return model_runs
+
+
+
+    # this calls self.eval_model_runs_avg_epoch to get the posterior means
+    # then it writes all the data to file
+    def write_model_runs(self, datasets, output_fname=None):
+        """Run the model on the data in data_dict, and save the computed values.
+
+        LFADS generates a number of outputs for each examples, and these are all
+        saved.  They are:
+          The mean and variance of the prior of g0.
+          The mean and variance of approximate posterior of g0.
+          The control inputs (if enabled)
+          The initial conditions, g0, for all examples.
+          The generator states for all time.
+          The factors for all time.
+          The output distribution parameters (e.g. rates) for all time.
+
+        Args:
+          datasets: a dictionary of named data_dictionaries, see top of lfads.py
+          output_fname: a file name stem for the output files.
+        """
+        hps = self.hps
+        kind = kind_dict_key(hps.kind)
+
+        for data_name, data_dict in datasets.items():
+          data_tuple = [('train', data_dict['train_data']),
+                        ('valid', data_dict['valid_data'])]
+          for data_kind, data_extxd in data_tuple:
+            if not output_fname:
+              fname = "model_runs_" + data_name + '_' + data_kind + '_' + kind
+            else:
+              fname = output_fname + data_name + '_' + data_kind + '_' + kind
+
+            print("Writing data for %s data and kind %s." % (data_name, data_kind))
+            model_runs = self.eval_model_runs_avg_epoch(data_name, data_extxd)
+            full_fname = os.path.join(hps.lfads_save_dir, fname)
+            write_data(full_fname, model_runs, compression='gzip')
+            print("Done.")
+
+            
