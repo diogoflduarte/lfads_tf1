@@ -788,6 +788,9 @@ class LFADS(object):
             gen_states[es_idx,:,:] = model_values['gen_states']
             factors[es_idx,:,:] = model_values['factors']
             out_dist_params[es_idx,:,:] = model_values['output_dist_params']
+
+            ## these are from the original LFADS code, but not currently
+            # computed in this version
             
             #costs[es_idx] = model_values['costs']
             #nll_bound_vaes[es_idx] = model_values['nll_bound_vaes']

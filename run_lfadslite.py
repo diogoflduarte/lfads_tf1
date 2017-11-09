@@ -66,10 +66,10 @@ CO_POST_VAR_MIN = 0.0001
 
 
 flags = tf.app.flags
-flags.DEFINE_integer("kind", kind_dict("train"),
+flags.DEFINE_string("kind", "train",
                     "Type of model to build {train, \
-                    posterior_sample_and_average, \
-                    prior_sample, write_model_params")
+                    posterior_sample_and_average, posterior_mean, \
+                    prior_sample, write_model_params}")
 flags.DEFINE_string("output_dist", OUTPUT_DIST,
                     "Type of output distribution, 'poisson' or 'gaussian'")
 flags.DEFINE_boolean("allow_gpu_growth", True,
@@ -354,7 +354,9 @@ def build_hyperparameter_dict(flags):
   """
   d = {}
   # Data
-  d['kind'] = flags.kind
+# CP - in this model we use enumerations for the 'kind'
+  #  d['kind'] = flags.kind
+  d['kind'] = kind_dict(flags.kind)
   d['output_dist'] = flags.output_dist
   d['data_dir'] = flags.data_dir
   d['lfads_save_dir'] = flags.lfads_save_dir
