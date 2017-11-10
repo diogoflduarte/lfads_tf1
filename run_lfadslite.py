@@ -296,9 +296,9 @@ def build_model(hps, datasets=None):
     if hps.kind in [kind_dict("posterior_sample_and_average"),
                     kind_dict("prior_sample"),
                     kind_dict("write_model_params")]:
-      print("Possible error!!! You are running ", kind, " on a newly \
+      print("Possible error!!! You are running ", kind_dict_key(hps.kind), " on a newly \
       initialized model!")
-      print("Are you sure you sure ", ckpt.model_checkpoint_path, " exists?")
+      print("Are you sure you sure ", hps.lfads_save_dir, " exists?")
 
     tf.global_variables_initializer().run()
 

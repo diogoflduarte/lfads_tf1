@@ -587,7 +587,8 @@ class LFADS(object):
                 checkpoint_path = os.path.join(self.hps.lfads_save_dir,
                                                self.hps.checkpoint_name + '_lve.ckpt')
                 self.lve_saver.save(session, checkpoint_path,
-                                    global_step=self.train_step)
+                                    global_step=self.train_step,
+                                    latest_filename='checkpoint_lve')
             
             kl_weight = hps['kl_ic_weight']
             train_step = session.run(self.train_step)
