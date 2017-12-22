@@ -537,7 +537,7 @@ class LFADS(object):
         return session.run(self.learning_rate)
 
 
-    def train_model(self, datasets):
+    def train_model(self, datasets, num_epochs=None):
     # this is the main loop for training a model
         hps = self.hps
 
@@ -639,9 +639,16 @@ class LFADS(object):
                 
             new_lr = self.get_learning_rate()
             # should we stop?
-            if new_lr < hps['learning_rate_stop']:
-                print("Learning rate criteria met")
-                break
+            if num_epochs is None:
+                if new_lr < hps['learning_rate_stop']:
+                    print("Learning rate criteria met")
+                    break
+            else:
+                if nepoch == num_epochs + 1:  # nepoch starts at 0
+                    print("Num epoch criteria met. "
+                          "Completed {} epochs.".format(nepoch))
+                    break
+
 
 
     def eval_model_runs_batch(self, data_name, data_bxtxd,
