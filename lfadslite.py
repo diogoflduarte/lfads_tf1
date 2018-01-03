@@ -537,7 +537,7 @@ class LFADS(object):
         return session.run(self.learning_rate)
 
 
-    def train_model(self, datasets, num_epochs=None):
+    def train_model(self, datasets, target_num_epochs=None):
     # this is the main loop for training a model
         hps = self.hps
 
@@ -555,7 +555,7 @@ class LFADS(object):
         lr_stop = hps.learning_rate_stop
 
         # epoch counter
-        nepoch = -1
+        nepoch = 0
 
         # TODO: modify to work with multiple datasets
         name=datasets.keys()[0]
@@ -567,7 +567,18 @@ class LFADS(object):
         train_costs = []
         lve = float('Inf')
         while True:
-            nepoch += 1
+            new_lr = self.get_learning_rate()
+            # should we stop?
+            if target_num_epochs is None:
+                if new_lr < hps['learning_rate_stop']:
+                    print("Learning rate criteria met")
+                    break
+            else:
+                if nepoch == target_num_epochs:  # nepoch starts at 0
+                    print("Num epoch criteria met. "
+                          "Completed {} epochs.".format(nepoch))
+                    return lve
+
             do_save_ckpt = True if nepoch % 10 ==0 else False
             start_time = time.time()
             tr_total_cost, tr_recon_cost, tr_kl_cost = \
@@ -618,15 +629,12 @@ class LFADS(object):
                 with open(csv_file, "a") as myfile:
                     myfile.write(csv_outstr)
 
-
             #plotind = random.randint(0, hps['batch_size']-1)
             #ops_to_eval = [self.output_dist_params]
             #output = session.run(ops_to_eval, feed_dict)
             #plt = plot_data(this_batch[plotind,:,:], output[0][plotind,:,:])
             #if nepoch % 15 == 0:
             #    close_all_plots()
-
-                
 
             # should we decrement learning rate?
             n_lr = hps['learning_rate_n_to_compare']
@@ -636,19 +644,8 @@ class LFADS(object):
                 self.run_learning_rate_decay_opt()
 
             train_costs.append(train_cost_to_use)
-                
-            new_lr = self.get_learning_rate()
-            # should we stop?
-            if num_epochs is None:
-                if new_lr < hps['learning_rate_stop']:
-                    print("Learning rate criteria met")
-                    break
-            else:
-                if nepoch == num_epochs + 1:  # nepoch starts at 0
-                    print("Num epoch criteria met. "
-                          "Completed {} epochs.".format(nepoch))
-                    break
 
+            nepoch += 1
 
 
     def eval_model_runs_batch(self, data_name, data_bxtxd,
