@@ -568,7 +568,7 @@ class LFADS(object):
         lve = float('Inf')
         while True:
             nepoch += 1
-            do_save_ckpt = True if nepoch % 10 ==0 else False
+            do_save_ckpt = True if nepoch % 10 == 0 else False
             start_time = time.time()
             tr_total_cost, tr_recon_cost, tr_kl_cost = \
                 self.train_epoch(datasets, do_save_ckpt=do_save_ckpt,
@@ -584,8 +584,14 @@ class LFADS(object):
             if val_recon_cost < lve:
                 # new lowest validation error
                 lve = val_recon_cost
+                # MRK, make lve accessible from the model class
+                self.lve = lve
+
                 checkpoint_path = os.path.join(self.hps.lfads_save_dir,
                                                self.hps.checkpoint_name + '_lve.ckpt')
+                # MRK, for convenience, it can be reconstructed from the paths in hps
+                #self.lve_checkpoint = checkpoint_path
+
                 self.lve_saver.save(session, checkpoint_path,
                                     global_step=self.train_step,
                                     latest_filename='checkpoint_lve')
@@ -629,6 +635,7 @@ class LFADS(object):
                 
 
             # should we decrement learning rate?
+            # MRK, for PBT we can set n_lr to np.inf
             n_lr = hps['learning_rate_n_to_compare']
             train_cost_to_use = tr_total_cost
             if len(train_costs) > n_lr and train_cost_to_use > np.max(train_costs[-n_lr:]):
