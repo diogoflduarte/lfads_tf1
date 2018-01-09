@@ -20,9 +20,6 @@ from customcells import CustomGRUCell
 
 
 
-
-
-
 class LFADS(object):
 
     def __init__(self, hps, datasets = None):
@@ -577,9 +574,10 @@ class LFADS(object):
                 if nepoch == target_num_epochs:  # nepoch starts at 0
                     print("Num epoch criteria met. "
                           "Completed {} epochs.".format(nepoch))
-                    return lve
+                    break
+                    #return lve
 
-            do_save_ckpt = True if nepoch % 10 ==0 else False
+            do_save_ckpt = True if nepoch % 10 == 0 else False
 
             start_time = time.time()
             tr_total_cost, tr_recon_cost, tr_kl_cost = \
@@ -593,6 +591,11 @@ class LFADS(object):
                 self.valid_epoch(datasets,
                                  kl_ic_weight = hps['kl_ic_weight'],
                                  kl_co_weight = hps['kl_co_weight'])
+
+            if np.isnan(tr_total_cost) or np.isnan(val_total_cost):
+                print('Nan found in training or validation cost evaluation. Training stopped!')
+                break
+
             if val_recon_cost < lve:
                 # new lowest validation error
                 lve = val_recon_cost
