@@ -112,6 +112,8 @@ class LFADS(object):
                                               initial_state = self.gen_ics,
                                               rnn_type = 'customgru',
                                               output_keep_prob = self.keep_prob)
+                # save the generator states
+                self.gen_states = self.gen_rnn_obj.states
             with tf.variable_scope('factors'):
 
                 ## factors
