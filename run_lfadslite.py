@@ -23,6 +23,11 @@ CHECKPOINT_NAME = "lfads_vae"
 DEVICE = "gpu:0" # "cpu:0", or other gpus, e.g. "gpu:1"
 PS_NEXAMPLES_TO_PROCESS = 1e8 # if larger than number of examples, process all
 
+# L2 weights
+L2_GEN_SCALE = 0.0
+L2_CON_SCALE = 0.0
+L2_IC_SCALE = 0.0
+L2_CI_SCALE = 0.0
 
 IC_DIM = 64
 FACTORS_DIM = 50
@@ -135,6 +140,14 @@ flags.DEFINE_integer("con_fac_in_dim", CON_FAC_IN_DIM,
 # for the LFADS application or not.
 flags.DEFINE_integer("gen_dim", GEN_DIM,
                      "Cell hidden size, generator.")
+flags.DEFINE_float("l2_gen_scale", L2_GEN_SCALE,
+                   "L2 regularization cost for the generator only.")
+flags.DEFINE_float("l2_con_scale", L2_CON_SCALE,
+                   "L2 regularization cost for the controller only.")
+flags.DEFINE_float("l2_ic_scale", L2_IC_SCALE,
+                   "L2 regularization cost for the generator only.")
+flags.DEFINE_float("l2_ci_scale", L2_CI_SCALE,
+                   "L2 regularization cost for the controller only.")
 
 # KL DISTRIBUTIONS
 # If you don't know what you are donig here, please leave alone, the
@@ -403,6 +416,10 @@ def build_hyperparameter_dict(flags):
 
   # Overfitting
   d['keep_prob'] = flags.keep_prob
+  d['l2_gen_scale'] = flags.l2_gen_scale
+  d['l2_con_scale'] = flags.l2_con_scale
+  d['l2_ic_scale'] = flags.l2_ic_scale
+  d['l2_ci_scale'] = flags.l2_ci_scale
   # Underfitting
   d['kl_ic_weight'] = flags.kl_ic_weight
   d['kl_co_weight'] = flags.kl_co_weight

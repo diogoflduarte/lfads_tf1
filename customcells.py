@@ -3,7 +3,7 @@ import tensorflow as tf
 from tensorflow.python.ops import rnn_cell_impl
 import os
 
-from helper_funcs import linear, kind_dict
+from helper_funcs import linear2, linear, kind_dict
 from helper_funcs import DiagonalGaussianFromExisting
 
 import collections
@@ -16,15 +16,20 @@ class CustomGRUCell(tf.nn.rnn_cell.RNNCell):
     def __init__(self, num_units, batch_size,
                  clip_value = None,
                  state_is_tuple = False,
-                 reuse = None):
+                 reuse = None,
+                 recurrent_collections=None,
+                 input_collections=None,
+                 forget_bias=1.0):
         super(CustomGRUCell, self).__init__(_reuse=reuse)
         self._num_units = num_units
         self._state_is_tuple = state_is_tuple
         self._batch_size = batch_size
         self._clip_value = clip_value
-
         self._output_size = self._num_units
         self._state_size = self._num_units
+        self._rec_collections = recurrent_collections
+        self._input_collections = input_collections
+        self._forget_bias = forget_bias # is not used in LFADS
 
     @property
     def state_size(self):
@@ -41,14 +46,43 @@ class CustomGRUCell(tf.nn.rnn_cell.RNNCell):
         with tf.variable_scope(scope or type(self).__name__):
 
             with tf.variable_scope("Gates"):
-                ru = linear(tf.concat(axis=1, values=[inputs, state]),
-                                2 * self._num_units, name='ru_linear')
-                ru = tf.nn.sigmoid(ru)
-                r, u = tf.split( ru, 2, axis=1)
+                #ru = linear(tf.concat(axis=1, values=[inputs, state]),
+                #                2 * self._num_units, name='ru_linear')
+                # MRK, note, hps.input_weight_scale is replaced with 1.0 for now
+                # MRK, separate input and state weights collections
+                r_x, u_x = tf.split(axis=1, num_or_size_splits=2, value=linear2(inputs,
+                                                                               2 * self._num_units,
+                                                                               alpha=1.0, # input_weight_scale
+                                                                               do_bias=False,
+                                                                               name="input_ru_linear",
+                                                                               normalized=False,
+                                                                               collections=self._input_collections))
+
+                r_h, u_h = tf.split(axis=1, num_or_size_splits=2, value=linear2(state,
+                                                                               2 * self._num_units,
+                                                                               do_bias=True,
+                                                                               alpha=1.0, #self._rec_weight_scale,
+                                                                               name="state_ru_linear",
+                                                                               collections=self._rec_collections))
+                r = r_x + r_h
+                u = u_x + u_h
+                r, u = tf.sigmoid(r), tf.sigmoid(u + self._forget_bias)
+                #ru = tf.nn.sigmoid(ru)
+                #r, u = tf.split( ru, 2, axis=1)
 
             with tf.variable_scope("Candidate"):
-                c = tf.nn.tanh( _linear([inputs, r * state],
-                                                          self._num_units, True))
+                #c = tf.nn.tanh( _linear([inputs, r * state],
+                #                                          self._num_units, True))
+            # new_h = u * h + (1 - u) * c
+                c_x = linear2(inputs, self._num_units, name="input_c_linear", do_bias=False,
+                             alpha=1.0, #self._input_weight_scale,
+                             normalized=False,
+                             collections=self._input_collections)
+                c_rh = linear2(r * state, self._num_units, name="state_c_linear", do_bias=True,
+                          alpha=1.0, #self._rec_weight_scale,
+                          collections=self._rec_collections)
+                c = tf.tanh(c_x + c_rh)
+
             new_h = u*state + (1 - u) * c
 
             # clip if requested

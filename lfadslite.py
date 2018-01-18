@@ -24,7 +24,7 @@ class LFADS(object):
 
     def __init__(self, hps, datasets = None):
     # build the graph
-        
+        print("This is lfadslite with L2")
         # set the learning rate, defaults to the hyperparam setting
         # TODO: test if this properly re-initializes learning rate when loading a new model
         self.learning_rate = tf.Variable(float(hps['learning_rate_init']), trainable=False, name="learning_rate")
@@ -62,7 +62,8 @@ class LFADS(object):
         with tf.variable_scope('ic_enc'):
             ic_enc_cell = CustomGRUCell(num_units = hps['ic_enc_dim'],\
                                         batch_size = graph_batch_size,
-                                        clip_value = hps['cell_clip_value'])
+                                        clip_value = hps['cell_clip_value'],
+                                        recurrent_collections=['l2_ic_enc'])
             ## ic_encoder
             self.ic_enc_rnn_obj = BidirectionalDynamicRNN(
                 state_dim = hps['ic_enc_dim'],
@@ -99,9 +100,10 @@ class LFADS(object):
         # if not, skip all these graph elements like so:
         if hps['co_dim'] ==0:
             with tf.variable_scope('generator'):
-                gen_cell = CustomGRUCell(num_units = hps['ic_enc_dim'],\
-                                            batch_size = graph_batch_size,
-                                            clip_value = hps['cell_clip_value'])
+                gen_cell = CustomGRUCell(num_units = hps['ic_enc_dim'],
+                                         batch_size = graph_batch_size,
+                                         clip_value = hps['cell_clip_value'],
+                                         recurrent_collections=['l2_gen'])
                 # setup generator
                 self.gen_rnn_obj = DynamicRNN(state_dim = hps['gen_dim'],
                                               batch_size = graph_batch_size,
@@ -126,7 +128,8 @@ class LFADS(object):
 
                 ci_enc_cell = CustomGRUCell(num_units = hps['ci_enc_dim'],\
                                             batch_size = graph_batch_size,
-                                            clip_value = hps['cell_clip_value'])
+                                            clip_value = hps['cell_clip_value'],
+                                            recurrent_collections=['l2_ci_enc'])
                 ## ci_encoder
                 self.ci_enc_rnn_obj = BidirectionalDynamicRNN(
                     state_dim = hps['ci_enc_dim'],
@@ -308,8 +311,38 @@ class LFADS(object):
         self.log_p = tf.reduce_mean( self.log_p_b, [0])
         self.rec_cost = -self.log_p
 
+
+        # calculate L2 costs for each network
+        # normalized by number of parameters.
+        self.l2_cost = tf.constant(0.0)
+        l2_costs = []
+        l2_numels = []
+        l2_reg_var_lists = [tf.get_collection('l2_gen'),
+                            tf.get_collection('l2_con'),
+                            tf.get_collection('l2_ic_enc'),
+                            tf.get_collection('l2_ci_enc'),
+                            ]
+
+        print(l2_reg_var_lists)
+        l2_reg_scales = [hps.l2_gen_scale, hps.l2_con_scale,
+                         hps.l2_ic_scale, hps.l2_ci_scale]
+        for l2_reg_vars, l2_scale in zip(l2_reg_var_lists, l2_reg_scales):
+            print(l2_scale)
+            if l2_scale == 0:
+                continue
+            for v in l2_reg_vars:
+                numel = tf.reduce_prod(tf.concat(axis=0, values=tf.shape(v)))
+                numel_f = tf.cast(numel, tf.float32)
+                l2_numels.append(numel_f)
+                v_l2 = tf.reduce_sum(v*v)
+                l2_costs.append(0.5 * l2_scale * v_l2)
+        print(l2_numels)
+        if l2_numels:
+            print("L2 cost applied")
+            self.l2_cost = tf.add_n(l2_costs) / tf.add_n(l2_numels)
+
         ## calculate total cost
-        self.total_cost = self.kl_cost + self.rec_cost
+        self.total_cost = self.l2_cost + self.kl_cost + self.rec_cost
 
         # get the list of trainable variables
         self.trainable_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
@@ -562,7 +595,23 @@ class LFADS(object):
         this_batch = data_extxd[0:hps['batch_size'],:,:]
 
         train_costs = []
-        lve = float('Inf')
+
+        # print validation costs before the first training step
+        val_total_cost, val_recon_cost, val_kl_cost = \
+            self.valid_epoch(datasets,
+                             kl_ic_weight=hps['kl_ic_weight'],
+                             kl_co_weight=hps['kl_co_weight'])
+        kl_weight = hps['kl_ic_weight']
+        train_step = session.run(self.train_step)
+        print("Epoch:%d, step:%d (TRAIN, VALID): total: %.2f, %.2f\
+        recon: %.2f, %.2f,     kl: %.2f, %.2f, kl weight: %.2f" % \
+              (-1, train_step, 0, val_total_cost,
+               0, val_recon_cost, 0, val_kl_cost,
+               kl_weight))
+        # pre-load the lve checkpoint (used in case of loaded checkpoint)
+
+        self.lve = val_recon_cost
+
         while True:
             new_lr = self.get_learning_rate()
             # should we stop?
@@ -575,7 +624,6 @@ class LFADS(object):
                     print("Num epoch criteria met. "
                           "Completed {} epochs.".format(nepoch))
                     break
-                    #return lve
 
             do_save_ckpt = True if nepoch % 10 == 0 else False
 
@@ -596,11 +644,21 @@ class LFADS(object):
                 print('Nan found in training or validation cost evaluation. Training stopped!')
                 break
 
-            if val_recon_cost < lve:
+
+            kl_weight = hps['kl_ic_weight']
+            train_step = session.run(self.train_step)
+            print("Epoch:%d, step:%d (TRAIN, VALID): total: %.2f, %.2f\
+            recon: %.2f, %.2f,     kl: %.2f, %.2f, kl weight: %.2f" % \
+                  (nepoch, train_step, tr_total_cost, val_total_cost,
+                   tr_recon_cost, val_recon_cost, tr_kl_cost, val_kl_cost,
+                   kl_weight))
+
+            # MRK, moved this here to get the right for the checkpoint train_step
+            if val_recon_cost < self.lve:
                 # new lowest validation error
-                lve = val_recon_cost
+                self.lve = val_recon_cost
                 # MRK, make lve accessible from the model class
-                self.lve = lve
+                #self.lve = lve
 
                 checkpoint_path = os.path.join(self.hps.lfads_save_dir,
                                                self.hps.checkpoint_name + '_lve.ckpt')
@@ -610,14 +668,6 @@ class LFADS(object):
                 self.lve_saver.save(session, checkpoint_path,
                                     global_step=self.train_step,
                                     latest_filename='checkpoint_lve')
-            
-            kl_weight = hps['kl_ic_weight']
-            train_step = session.run(self.train_step)
-            print("Epoch:%d, step:%d (TRAIN, VALID): total: %.2f, %.2f\
-            recon: %.2f, %.2f,     kl: %.2f, %.2f, kl weight: %.2f" % \
-                  (nepoch, train_step, tr_total_cost, val_total_cost,
-                   tr_recon_cost, val_recon_cost, tr_kl_cost, val_kl_cost,
-                   kl_weight))
 
             #l2 has not been implemented yet
             l2_cost = 0
