@@ -110,7 +110,6 @@ class ComplexCell(tf.nn.rnn_cell.RNNCell):
         self._var_min = var_min
         self._kind = kind
         self._clip_value = clip_value
-
         # note that there are 3x co_dim
         # because it has mean and logvar params, and samples
         self._num_units_tot = self._num_units_con + \
@@ -119,7 +118,11 @@ class ComplexCell(tf.nn.rnn_cell.RNNCell):
         self._state_size = self._num_units_con + \
                            self._num_units_gen + 3*self._co_dim + self._factors_dim
         self._noise_bxn = tf.random_normal([batch_size, self._co_dim])
-        
+
+        self.col_names = {'con': ['l2_con'],
+                          'gen': ['l2_gen'],
+                          'fac': ['l2_gen_2_factors'],}
+
     @property
     def state_size(self):
         return self._state_size
@@ -158,15 +161,43 @@ class ComplexCell(tf.nn.rnn_cell.RNNCell):
             with tf.variable_scope("Controller_Gates"):
                 #con_ru = _linear([con_inputs, con_s],
                 #                               2 * self._num_units_con, True, 1.0)
-                con_ru = linear(tf.concat(axis=1, values=[con_inputs, con_s]),
-                                2 * self._num_units_con, name='con_ru_linear')
-                con_ru = tf.nn.sigmoid(con_ru)
-                con_r, con_u = tf.split( con_ru, 2, axis=1)
+                #con_ru = linear(tf.concat(axis=1, values=[con_inputs, con_s]),
+                #                2 * self._num_units_con, name='con_ru_linear')
+                #con_ru = tf.nn.sigmoid(con_ru)
+                #con_r, con_u = tf.split( con_ru, 2, axis=1)
+                # MRK, add collections
+                r_x, u_x = tf.split(axis=1, num_or_size_splits=2, value=linear2(con_inputs,
+                                                                                2 * self._num_units_con,
+                                                                                alpha=1.0,  # input_weight_scale
+                                                                                do_bias=False,
+                                                                                name="input_con_ru_linear",
+                                                                                normalized=False,
+                                                                                collections=self.col_names['con']))
+
+                r_h, u_h = tf.split(axis=1, num_or_size_splits=2, value=linear2(con_s,
+                                                                                2 * self._num_units_con,
+                                                                                do_bias=True,
+                                                                                alpha=1.0,  # self._rec_weight_scale,
+                                                                                name="state_con_ru_linear",
+                                                                                collections=self.col_names['con']))
+                r = r_x + r_h
+                u = u_x + u_h
+                con_r, con_u = tf.sigmoid(r), tf.sigmoid(u + self._forget_bias)
 
             with tf.variable_scope("Controller_Candidate"):
-                con_c = tf.nn.tanh( _linear([con_inputs, con_r * con_s],
-                                                          self._num_units_con, True))
-            con_new_h = con_u*con_s + (1 - con_u) * con_c
+                #con_c = tf.nn.tanh( _linear([con_inputs, con_r * con_s],
+                #                                          self._num_units_con, True))
+            #con_new_h = con_u*con_s + (1 - con_u) * con_c
+                c_x = linear2(con_inputs, self._num_units_con, name="input_con_c_linear", do_bias=False,
+                              alpha=1.0,  # self._input_weight_scale,
+                              normalized=False,
+                              collections=self.col_names['con'])
+                c_rh = linear2(con_r * con_s, self._num_units_con, name="state_con_c_linear", do_bias=True,
+                               alpha=1.0,  # self._rec_weight_scale,
+                               collections=self.col_names['con'])
+                con_c = tf.tanh(c_x + c_rh)
+
+            con_new_h = con_u * con_s + (1 - con_u) * con_c
 
             # calculate the controller outputs
             with tf.variable_scope("con_2_gen"):
@@ -191,20 +222,52 @@ class ComplexCell(tf.nn.rnn_cell.RNNCell):
             
             ## implement standard GRU eqns for generator
             with tf.variable_scope("Generator_Gates"):
-                gen_ru = linear(tf.concat(axis=1, values=[gen_inputs, gen_s]),
-                                2 * self._num_units_gen, name='gen_run_linear')
-                gen_ru = tf.nn.sigmoid(gen_ru)
-                gen_r, gen_u = tf.split(gen_ru, 2, axis=1)
+                #gen_ru = linear(tf.concat(axis=1, values=[gen_inputs, gen_s]),
+                #                2 * self._num_units_gen, name='gen_run_linear')
+                #gen_ru = tf.nn.sigmoid(gen_ru)
+                #gen_r, gen_u = tf.split(gen_ru, 2, axis=1)
+                r_x, u_x = tf.split(axis=1, num_or_size_splits=2, value=linear2(gen_inputs,
+                                                                                2 * self._num_units_gen,
+                                                                                alpha=1.0,  # input_weight_scale
+                                                                                do_bias=False,
+                                                                                name="input_gen_ru_linear",
+                                                                                normalized=False,
+                                                                                collections=self.col_names['gen']))
+
+                r_h, u_h = tf.split(axis=1, num_or_size_splits=2, value=linear2(gen_s,
+                                                                                2 * self._num_units_gen,
+                                                                                do_bias=True,
+                                                                                alpha=1.0,  # self._rec_weight_scale,
+                                                                                name="state_gen_ru_linear",
+                                                                                collections=self.col_names['gen']))
+                r = r_x + r_h
+                u = u_x + u_h
+                gen_r, gen_u = tf.sigmoid(r), tf.sigmoid(u + self._forget_bias)
 
             with tf.variable_scope("Generator_Candidate"):
-                gen_c = tf.nn.tanh( _linear([gen_inputs, gen_r * gen_s],
-                                            self._num_units_gen, True))
-            gen_new_h = gen_u*gen_s + (1 - gen_u) * gen_c
+                #gen_c = tf.nn.tanh( _linear([gen_inputs, gen_r * gen_s],
+                #                            self._num_units_gen, True))
+            #gen_new_h = gen_u*gen_s + (1 - gen_u) * gen_c
+                c_x = linear2(gen_inputs, self._num_units_gen, name="input_gen__c_linear", do_bias=False,
+                              alpha=1.0,  # self._input_weight_scale,
+                              normalized=False,
+                              collections=self.col_names['gen'])
+                c_rh = linear2(gen_r * gen_s, self._num_units_gen, name="state_gen_c_linear", do_bias=True,
+                               alpha=1.0,  # self._rec_weight_scale,
+                               collections=self.col_names['gen'])
+                c = tf.tanh(c_x + c_rh)
+
+            gen_new_h = gen_u * gen_s + (1 - gen_u) * c
 
             # calculate the factors
             with tf.variable_scope("gen_2_fac"):
                 fac_new_h = linear(gen_new_h, self._factors_dim,
-                                   name = "gen_2_fac_transform")
+                                   name = "gen_2_fac_transform",
+                                   collections=self.col_names['fac'])
+                #fac_new_h = linear2(gen_new_h, self._factors_dim,
+                #                    name = "gen_2_fac_transform",
+                 #                   collections=self.col_names['fac'])
+
 
             values = [con_new_h, gen_new_h, co_mean_new_h, co_logvar_new_h, co_out, fac_new_h]
             new_h = tf.concat(axis=1, values=values)

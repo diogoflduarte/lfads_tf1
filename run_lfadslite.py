@@ -28,6 +28,8 @@ L2_GEN_SCALE = 0.0
 L2_CON_SCALE = 0.0
 L2_IC_SCALE = 0.0
 L2_CI_SCALE = 0.0
+L2_GEN_2_FACTORS_SCALE = 0.0
+L2_CI_ENC_2_CO_IN = 0.0
 
 IC_DIM = 64
 FACTORS_DIM = 50
@@ -148,6 +150,12 @@ flags.DEFINE_float("l2_ic_scale", L2_IC_SCALE,
                    "L2 regularization cost for the generator only.")
 flags.DEFINE_float("l2_ci_scale", L2_CI_SCALE,
                    "L2 regularization cost for the controller only.")
+flags.DEFINE_float("l2_gen_2_factors_scale", L2_GEN_2_FACTORS_SCALE,
+                   "L2 regularization cost for the generator only.")
+flags.DEFINE_float("l2_ci_enc_2_co_in", L2_CI_ENC_2_CO_IN,
+                   "L2 regularization cost for the controller only.")
+
+
 
 # KL DISTRIBUTIONS
 # If you don't know what you are donig here, please leave alone, the
@@ -420,6 +428,9 @@ def build_hyperparameter_dict(flags):
   d['l2_con_scale'] = flags.l2_con_scale
   d['l2_ic_scale'] = flags.l2_ic_scale
   d['l2_ci_scale'] = flags.l2_ci_scale
+  d['l2_gen_2_factors_scale'] = flags.l2_gen_2_factors_scale
+  d['l2_ci_enc_2_co_in'] = flags.l2_ci_enc_2_co_in
+
   # Underfitting
   d['kl_ic_weight'] = flags.kl_ic_weight
   d['kl_co_weight'] = flags.kl_co_weight

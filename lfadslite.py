@@ -169,7 +169,8 @@ class LFADS(object):
                         output_size = hps['con_ci_enc_in_dim'],
                         transform_name = 'ci_enc_2_co_in',
                         output_name = 'ci_enc_output_concat',
-                        nonlinearity = None)
+                        nonlinearity = None,
+                        collections=['l2_ci_enc_2_co_in'])
                     self.ci_enc_outputs = self.ci_enc_object.output
 
             ## the controller, controller outputs, generator, and factors are implemented
@@ -317,19 +318,24 @@ class LFADS(object):
         self.l2_cost = tf.constant(0.0)
         l2_costs = []
         l2_numels = []
-        l2_reg_var_lists = [tf.get_collection('l2_gen'),
-                            tf.get_collection('l2_con'),
-                            tf.get_collection('l2_ic_enc'),
-                            tf.get_collection('l2_ci_enc'),
+        l2_reg_var_lists = ['l2_gen',
+                            'l2_con',
+                            'l2_ic_enc',
+                            'l2_ci_enc',
+                            'l2_gen_2_factors',
+                            'l2_ci_enc_2_co_in',
                             ]
 
         print(l2_reg_var_lists)
         l2_reg_scales = [hps.l2_gen_scale, hps.l2_con_scale,
-                         hps.l2_ic_scale, hps.l2_ci_scale]
-        for l2_reg_vars, l2_scale in zip(l2_reg_var_lists, l2_reg_scales):
+                         hps.l2_ic_scale, hps.l2_ci_scale,
+                         hps.l2_gen_2_factors_scale,
+                         hps.l2_ci_enc_2_co_in]
+        for l2_reg, l2_scale in zip(l2_reg_var_lists, l2_reg_scales):
             print(l2_scale)
             if l2_scale == 0:
                 continue
+            l2_reg_vars = tf.get_collection(l2_reg)
             for v in l2_reg_vars:
                 numel = tf.reduce_prod(tf.concat(axis=0, values=tf.shape(v)))
                 numel_f = tf.cast(numel, tf.float32)

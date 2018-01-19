@@ -64,7 +64,7 @@ def write_data(data_fname, data_dict, use_json=False, compression=None):
 
 
 
-def init_linear_transform(in_size, out_size, name=None):
+def init_linear_transform(in_size, out_size, name=None, collections=None):
 # generic function (we use linear transforms in a lot of places)
 # initialize the weights of the linear transformation based on the size of the inputs
     
@@ -73,9 +73,12 @@ def init_linear_transform(in_size, out_size, name=None):
     mat_init = tf.random_normal_initializer(0.0, stddev, dtype=tf.float32)
 
     # weight matrix
+    w_collections = [tf.GraphKeys.GLOBAL_VARIABLES, "norm-variables"]
+    if collections:
+      w_collections += collections
     wname = (name + "/W") if name else "/W"
     w = tf.get_variable(wname, [in_size, out_size], initializer=mat_init,
-                        dtype=tf.float32)
+                        dtype=tf.float32, collections=w_collections)
 
     #biases
     bname = (name + "/b") if name else "/b"
@@ -200,11 +203,11 @@ def linear2(x, out_size, do_bias=True, alpha=1.0, identity_if_possible=False,
     return tf.matmul(x, W)
 
 
-def linear(x, out_size, name):
+def linear(x, out_size, name, collections=None):
 # generic function (we use linear transforms in a lot of places)
 # initialize the weights of the linear transformation based on the size of the inputs
     in_size = int(x.get_shape()[1])
-    W,b = init_linear_transform(in_size, out_size, name=name)
+    W,b = init_linear_transform(in_size, out_size, name=name, collections=collections)
     return tf.matmul(x, W) + b
 
 
@@ -472,13 +475,15 @@ class LinearTimeVarying(object):
     # self.output = linear transform
     # self.output_nl = nonlinear transform
     
-    def __init__(self, inputs, output_size, transform_name, output_name, nonlinearity = None ):
+    def __init__(self, inputs, output_size, transform_name, output_name, nonlinearity = None,
+                 collections=None):
         num_timesteps = tf.shape(inputs)[1]
         # must return "as_list" to get ints
         input_size = inputs.get_shape().as_list()[2]
         outputs = []
         outputs_nl = []
-        self.W,self.b = init_linear_transform(input_size, output_size, name=transform_name)
+        self.W,self.b = init_linear_transform(input_size, output_size, name=transform_name,
+                                              collections=collections)
 
         inputs_permuted = tf.transpose(inputs, perm=[1, 0, 2])
         initial_outputs = tf.TensorArray(dtype=tf.float32, size=num_timesteps, name='init_linear_outputs')
