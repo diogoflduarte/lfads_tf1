@@ -96,7 +96,8 @@ class ComplexCell(tf.nn.rnn_cell.RNNCell):
                  co_dim, factors_dim, fac_2_con_dim,
                  batch_size, var_min = 0.0,
                  clip_value = None,
-                 state_is_tuple=False, reuse=None, kind=None):
+                 state_is_tuple=False, reuse=None, kind=None,
+                 forget_bias=1.0):
         super(ComplexCell, self).__init__(_reuse=reuse)
         
         self._num_units_con = num_units_con
@@ -110,6 +111,7 @@ class ComplexCell(tf.nn.rnn_cell.RNNCell):
         self._var_min = var_min
         self._kind = kind
         self._clip_value = clip_value
+        self._forget_bias = forget_bias
         # note that there are 3x co_dim
         # because it has mean and logvar params, and samples
         self._num_units_tot = self._num_units_con + \

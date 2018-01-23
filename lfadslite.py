@@ -121,6 +121,7 @@ class LFADS(object):
                                                     output_size = hps['factors_dim'],
                                                     transform_name = 'gen_2_factors',
                                                     output_name = 'factors_concat',
+                                                    collections='l2_gen_2_factors'
                                                  )
                 self.factors = self.fac_obj.output
         else:
