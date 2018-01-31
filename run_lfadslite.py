@@ -21,7 +21,7 @@ OUTPUT_FILENAME_STEM = ""
 CHECKPOINT_PB_LOAD_NAME = "checkpoint"
 CHECKPOINT_NAME = "lfads_vae"
 DEVICE = "gpu:0" # "cpu:0", or other gpus, e.g. "gpu:1"
-PS_NEXAMPLES_TO_PROCESS = 1e8 # if larger than number of examples, process all
+PS_NEXAMPLES_TO_PROCESS = int(1e8) # if larger than number of examples, process all
 
 
 IC_DIM = 64
