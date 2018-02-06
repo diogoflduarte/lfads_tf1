@@ -21,13 +21,13 @@ OUTPUT_FILENAME_STEM = ""
 CHECKPOINT_PB_LOAD_NAME = "checkpoint"
 CHECKPOINT_NAME = "lfads_vae"
 DEVICE = "gpu:0" # "cpu:0", or other gpus, e.g. "gpu:1"
-PS_NEXAMPLES_TO_PROCESS = 1e8 # if larger than number of examples, process all
+PS_NEXAMPLES_TO_PROCESS = int(1e8) # if larger than number of examples, process all
 
 # L2 weights
 L2_GEN_SCALE = 0.0
 L2_CON_SCALE = 0.0
-L2_IC_SCALE = 0.0
-L2_CI_SCALE = 0.0
+L2_IC_ENC_SCALE = 0.0
+L2_CI_ENC_SCALE = 0.0
 L2_GEN_2_FACTORS_SCALE = 0.0
 L2_CI_ENC_2_CO_IN = 0.0
 
@@ -52,6 +52,7 @@ CON_FAC_IN_DIM = 10
 MAX_GRAD_NORM = 200.0
 CELL_CLIP_VALUE = 5.0
 KEEP_PROB = 0.95
+KEEP_RATIO = 0.95
 OUTPUT_DIST = 'poisson' # 'poisson' or 'gaussian'
 
 DATA_DIR = "/tmp/rnn_synth_data_v1.0/"
@@ -146,9 +147,9 @@ flags.DEFINE_float("l2_gen_scale", L2_GEN_SCALE,
                    "L2 regularization cost for the generator only.")
 flags.DEFINE_float("l2_con_scale", L2_CON_SCALE,
                    "L2 regularization cost for the controller only.")
-flags.DEFINE_float("l2_ic_scale", L2_IC_SCALE,
+flags.DEFINE_float("l2_ic_enc_scale", L2_IC_ENC_SCALE,
                    "L2 regularization cost for the generator only.")
-flags.DEFINE_float("l2_ci_scale", L2_CI_SCALE,
+flags.DEFINE_float("l2_ci_enc_scale", L2_CI_ENC_SCALE,
                    "L2 regularization cost for the controller only.")
 flags.DEFINE_float("l2_gen_2_factors_scale", L2_GEN_2_FACTORS_SCALE,
                    "L2 regularization cost for the generator only.")
@@ -252,6 +253,9 @@ flags.DEFINE_float("cell_clip_value", CELL_CLIP_VALUE,
 # Dropout is done on the input data, on controller inputs (from
 # encoder), on outputs from generator to factors.
 flags.DEFINE_float("keep_prob", KEEP_PROB, "Dropout keep probability.")
+
+# COORDINATED DROPOUT
+flags.DEFINE_float("keep_ratio", KEEP_RATIO, "Coordinated Dropout input keep probability.")
 
 # UNDERFITTING
 # If the primary task of LFADS is "filtering" of data and not
@@ -424,10 +428,11 @@ def build_hyperparameter_dict(flags):
 
   # Overfitting
   d['keep_prob'] = flags.keep_prob
+  d['keep_ratio'] = flags.keep_ratio
   d['l2_gen_scale'] = flags.l2_gen_scale
   d['l2_con_scale'] = flags.l2_con_scale
-  d['l2_ic_scale'] = flags.l2_ic_scale
-  d['l2_ci_scale'] = flags.l2_ci_scale
+  d['l2_ic_enc_scale'] = flags.l2_ic_enc_scale
+  d['l2_ci_enc_scale'] = flags.l2_ci_enc_scale
   d['l2_gen_2_factors_scale'] = flags.l2_gen_2_factors_scale
   d['l2_ci_enc_2_co_in'] = flags.l2_ci_enc_2_co_in
 

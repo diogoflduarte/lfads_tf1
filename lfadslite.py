@@ -17,12 +17,20 @@ from plot_funcs import plot_data, close_all_plots
 from data_funcs import read_datasets
 from customcells import ComplexCell
 from customcells import CustomGRUCell
+from helper_funcs import dropout
+
 
 
 
 class LFADS(object):
 
     def __init__(self, hps, datasets = None):
+
+        # to stop certain gradients paths through the graph in backprop
+        def entry_stop_gradients(target, mask):
+            mask_h = tf.abs(1 - mask)
+            return tf.stop_gradient(mask_h * target) + mask * target
+
     # build the graph
         print("This is lfadslite with L2")
         # set the learning rate, defaults to the hyperparam setting
@@ -52,12 +60,16 @@ class LFADS(object):
             # dropout keep probability
             #   enumerated in helper_funcs.kind_dict
             self.keep_prob = tf.placeholder(tf.float32, name='keep_prob')
-            
+            self.keep_ratio = tf.placeholder(tf.float32, name='keep_ratio')
+
             self.run_type = tf.placeholder(tf.int16, name='run_type')
             self.kl_ic_weight = tf.placeholder(tf.float32, name='kl_ic_weight')
             self.kl_co_weight = tf.placeholder(tf.float32, name='kl_co_weight')
             # name of the dataset
             self.dataName = tf.placeholder(tf.string, shape=(), name='dataset_name')
+
+        # coordinated dropout on inputs
+        masked_dataset_ph, input_binary_mask = dropout(self.dataset_ph, self.keep_ratio)
 
         with tf.variable_scope('ic_enc'):
             ic_enc_cell = CustomGRUCell(num_units = hps['ic_enc_dim'],\
@@ -71,7 +83,7 @@ class LFADS(object):
                 name = 'ic_enc',
                 sequence_lengths = np.zeros(graph_batch_size) + hps['num_steps'],
                 cell = ic_enc_cell,
-                inputs = self.dataset_ph,
+                inputs = masked_dataset_ph,
                 initial_state = None,
                 rnn_type = 'customgru',
                 output_keep_prob = self.keep_prob)
@@ -114,6 +126,8 @@ class LFADS(object):
                                               initial_state = self.gen_ics,
                                               rnn_type = 'customgru',
                                               output_keep_prob = self.keep_prob)
+                self.gen_states = self.gen_rnn_obj.states
+
             with tf.variable_scope('factors'):
 
                 ## factors
@@ -138,7 +152,7 @@ class LFADS(object):
                     name = 'ci_enc',
                     sequence_lengths = np.zeros(graph_batch_size) + hps['num_steps'],
                     cell = ci_enc_cell,
-                    inputs = self.dataset_ph,
+                    inputs = masked_dataset_ph,
                     initial_state = None,
                     rnn_type = 'customgru',
                     output_keep_prob = self.keep_prob)
@@ -299,9 +313,10 @@ class LFADS(object):
                 tf.reduce_mean(self.kl_cost_co_b_t, [1]) )
             self.kl_cost += self.kl_cost_co * self.kl_co_weight
 
+        masked_logrates = entry_stop_gradients(self.logrates, 1. - input_binary_mask)
         ## calculate reconstruction cost
         if hps.output_dist.lower() == 'poisson':
-            self.loglikelihood_b_t = Poisson(self.logrates).logp(self.dataset_ph)
+            self.loglikelihood_b_t = Poisson(masked_logrates).logp(self.dataset_ph)
         if hps.output_dist.lower() == 'gaussian':
             self.loglikelihood_b_t = diag_gaussian_log_likelihood(self.dataset_ph,
                                          self.output_mean, self.output_logvar)
@@ -329,7 +344,7 @@ class LFADS(object):
 
         print(l2_reg_var_lists)
         l2_reg_scales = [hps.l2_gen_scale, hps.l2_con_scale,
-                         hps.l2_ic_scale, hps.l2_ci_scale,
+                         hps.l2_ic_enc_scale, hps.l2_ci_enc_scale,
                          hps.l2_gen_2_factors_scale,
                          hps.l2_ci_enc_2_co_in]
         for l2_reg, l2_scale in zip(l2_reg_var_lists, l2_reg_scales):
@@ -400,7 +415,8 @@ class LFADS(object):
         
     ## functions to interface with the outside world
     def build_feed_dict(self, train_name, data_bxtxd, run_type = None,
-                        keep_prob=None, kl_ic_weight=1.0, kl_co_weight=1.0):
+                        keep_prob=None, kl_ic_weight=1.0, kl_co_weight=1.0,
+                        keep_ratio=None):
       """Build the feed dictionary, handles cases where there is no value defined.
 
       Args:
@@ -439,6 +455,11 @@ class LFADS(object):
         feed_dict[self.keep_prob] = self.hps.keep_prob
       else:
         feed_dict[self.keep_prob] = keep_prob
+
+      if keep_ratio is None:
+        feed_dict[self.keep_ratio] = self.hps.keep_ratio
+      else:
+        feed_dict[self.keep_ratio] = keep_ratio
 
       return feed_dict
 
@@ -517,9 +538,12 @@ class LFADS(object):
             ops_to_eval.append(self.train_op)
             kind_data = "train_data"
             keep_prob = self.hps.keep_prob
+            keep_ratio = self.hps.keep_ratio
+
         else:
             kind_data = "valid_data"
             keep_prob = 1.0
+            keep_ratio = 1.0
             
         session = tf.get_default_session()
 
@@ -533,7 +557,8 @@ class LFADS(object):
             feed_dict = self.build_feed_dict(name, this_batch, keep_prob=keep_prob,
                                              run_type = kind_dict("train"),
                                              kl_ic_weight = kl_ic_weight,
-                                             kl_co_weight = kl_co_weight)
+                                             kl_co_weight = kl_co_weight,
+                                             keep_ratio=keep_ratio)
             evald_ops_this_batch = session.run(ops_to_eval, feed_dict = feed_dict)
             # for training runs, there is an extra output argument. kill it
             if len(evald_ops_this_batch) > 3:
@@ -550,6 +575,7 @@ class LFADS(object):
                              self.kl_cost, self.output_dist_params, self.learning_rate]
         feed_dict = {self.dataset_ph: dict_from_py['dataset_ph'],
                      self.keep_prob: dict_from_py['keep_prob'],
+                     self.keep_ratio: dict_from_py['keep_ratio'],
                      self.run_type: kind_dict("train")}
         return session.run(ops_to_eval, feed_dict)
 
@@ -559,6 +585,7 @@ class LFADS(object):
         ops_to_eval = [self.total_cost, self.rec_cost, self.kl_cost]
         feed_dict = {self.input_data: dict_from_py['input_data'],
                      self.keep_prob: 1.0, # don't need to lower keep_prob from validation
+                     self.keep_ratio: 1.0,
                      self.run_type: kind_dict("train")}
         return session.run(ops_to_eval, feed_dict)
 
@@ -594,6 +621,8 @@ class LFADS(object):
         # epoch counter
         nepoch = 0
 
+        num_save_checkpoint = 1     # save checkpoints every num_save_checkpoint steps
+
         # TODO: modify to work with multiple datasets
         name=datasets.keys()[0]
         
@@ -619,6 +648,9 @@ class LFADS(object):
 
         self.lve = val_recon_cost
 
+        coef = 0.5  # smoothing coefficient - lower values mean more smoothing
+        smth_val_recn_cost = val_recon_cost
+
         while True:
             new_lr = self.get_learning_rate()
             # should we stop?
@@ -632,7 +664,10 @@ class LFADS(object):
                           "Completed {} epochs.".format(nepoch))
                     break
 
-            do_save_ckpt = True if nepoch % 10 == 0 else False
+            do_save_ckpt = True if nepoch % num_save_checkpoint == 0 else False
+            # always save checkpoint for the last epoch
+            if target_num_epochs is not None:
+                do_save_ckpt = True if nepoch == (target_num_epochs-1) else do_save_ckpt
 
             start_time = time.time()
             tr_total_cost, tr_recon_cost, tr_kl_cost = \
@@ -651,19 +686,25 @@ class LFADS(object):
                 print('Nan found in training or validation cost evaluation. Training stopped!')
                 break
 
+            # initialize the running averge
+            if nepoch == 0:
+                smth_val_recn_cost = val_recon_cost
+
+            smth_val_recn_cost = (1 - coef) * smth_val_recn_cost + coef * val_recon_cost
 
             kl_weight = hps['kl_ic_weight']
             train_step = session.run(self.train_step)
             print("Epoch:%d, step:%d (TRAIN, VALID): total: %.2f, %.2f\
             recon: %.2f, %.2f,     kl: %.2f, %.2f, kl weight: %.2f" % \
                   (nepoch, train_step, tr_total_cost, val_total_cost,
-                   tr_recon_cost, val_recon_cost, tr_kl_cost, val_kl_cost,
+                   tr_recon_cost, smth_val_recn_cost, tr_kl_cost, val_kl_cost,
                    kl_weight))
 
+            self.recon_cost = smth_val_recn_cost
             # MRK, moved this here to get the right for the checkpoint train_step
-            if val_recon_cost < self.lve:
+            if smth_val_recn_cost < self.lve:
                 # new lowest validation error
-                self.lve = val_recon_cost
+                self.lve = smth_val_recn_cost
                 # MRK, make lve accessible from the model class
                 #self.lve = lve
 
@@ -689,7 +730,7 @@ class LFADS(object):
                 recon,%.2f,%.2f, kl,%.2f,%.2f, l2,%.5f, \
                 klweight,%.2f, l2weight,%.2f\n"% \
                 (nepoch, train_step, tr_total_cost, val_total_cost,
-                 tr_recon_cost, val_recon_cost, tr_kl_cost, val_kl_cost,
+                 tr_recon_cost, smth_val_recn_cost, tr_kl_cost, val_kl_cost,
                  l2_cost, kl_weight, l2_weight)
                 # log to file
                 csv_file = os.path.join(self.hps.lfads_save_dir, self.hps.csv_log+'.csv')
@@ -741,7 +782,7 @@ class LFADS(object):
         session = tf.get_default_session()
         # kl_ic_weight and kl_co_weight do not matter for posterior sample and average
         feed_dict = self.build_feed_dict(data_name, data_bxtxd, run_type=kind_dict('posterior_sample_and_average'),
-                                         keep_prob=1.0) 
+                                         keep_prob=1.0, keep_ratio=1.0)
         # Non-temporal signals will be batch x dim.
         # Temporal signals are list length T with elements batch x dim.
         tf_vals = [self.gen_ics, self.gen_states, self.factors,
@@ -914,20 +955,24 @@ class LFADS(object):
         """
         hps = self.hps
         kind = kind_dict_key(hps.kind)
+        all_model_runs = []
 
         for data_name, data_dict in datasets.items():
           data_tuple = [('train', data_dict['train_data']),
                         ('valid', data_dict['valid_data'])]
           for data_kind, data_extxd in data_tuple:
-            if not output_fname:
+            if output_fname is None:
               fname = "model_runs_" + data_name + '_' + data_kind + '_' + kind
             else:
               fname = output_fname + data_name + '_' + data_kind + '_' + kind
 
             print("Writing data for %s data and kind %s." % (data_name, data_kind))
             model_runs = self.eval_model_runs_avg_epoch(data_name, data_extxd)
+            all_model_runs.append(model_runs)
             full_fname = os.path.join(hps.lfads_save_dir, fname)
             write_data(full_fname, model_runs, compression='gzip')
             print("Done.")
+
+        return all_model_runs
 
             

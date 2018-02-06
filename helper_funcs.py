@@ -1,3 +1,8 @@
+
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import numpy as np
 import tensorflow as tf
 import os
@@ -607,3 +612,86 @@ class Poisson(object):
     # log poisson(k, r=exp(x)) = k * x - exp(x) - lgamma(k + 1)
     return k * self.logr - tf.exp(self.logr) - tf.lgamma(k + 1)
 
+
+"""Wrappers for primitive Neural Net (NN) Operations."""
+
+import numbers
+from tensorflow.python.eager import context
+from tensorflow.python.framework import ops
+from tensorflow.python.framework import tensor_shape
+from tensorflow.python.framework import tensor_util
+from tensorflow.python.ops import array_ops
+from tensorflow.python.ops import math_ops
+from tensorflow.python.ops import random_ops
+# dropout that also returns the binary mask
+def dropout(x, keep_prob, noise_shape=None, seed=None, name=None,
+            binary_tensor=None):  # pylint: disable=invalid-name
+  """Computes dropout.
+  With probability `keep_prob`, outputs the input element scaled up by
+  `1 / keep_prob`, otherwise outputs `0`.  The scaling is so that the expected
+  sum is unchanged.
+  By default, each element is kept or dropped independently.  If `noise_shape`
+  is specified, it must be
+  [broadcastable](http://docs.scipy.org/doc/numpy/user/basics.broadcasting.html)
+  to the shape of `x`, and only dimensions with `noise_shape[i] == shape(x)[i]`
+  will make independent decisions.  For example, if `shape(x) = [k, l, m, n]`
+  and `noise_shape = [k, 1, 1, n]`, each batch and channel component will be
+  kept independently and each row and column will be kept or not kept together.
+  Args:
+    x: A floating point tensor.
+    keep_prob: A scalar `Tensor` with the same type as x. The probability
+      that each element is kept.
+    noise_shape: A 1-D `Tensor` of type `int32`, representing the
+      shape for randomly generated keep/drop flags.
+    seed: A Python integer. Used to create random seeds. See
+      @{tf.set_random_seed}
+      for behavior.
+    name: A name for this operation (optional).
+  Returns:
+    A Tensor of the same shape of `x`.
+  Raises:
+    ValueError: If `keep_prob` is not in `(0, 1]` or if `x` is not a floating
+      point tensor.
+  """
+  with ops.name_scope(name, "dropout", [x]) as name:
+    x = ops.convert_to_tensor(x, name="x")
+    if not x.dtype.is_floating:
+      raise ValueError("x has to be a floating point tensor since it's going to"
+                       " be scaled. Got a %s tensor instead." % x.dtype)
+
+    # Only apply random dropout if mask is not provided
+
+    if isinstance(keep_prob, numbers.Real) and not 0 < keep_prob <= 1:
+      raise ValueError("keep_prob must be a scalar tensor or a float in the "
+                       "range (0, 1], got %g" % keep_prob)
+
+    keep_prob = keep_prob if binary_tensor is None else 1 - keep_prob
+
+    keep_prob = ops.convert_to_tensor(keep_prob,
+                                      dtype=x.dtype,
+                                      name="keep_prob")
+
+    keep_prob.get_shape().assert_is_compatible_with(tensor_shape.scalar())
+
+    if binary_tensor is None:
+        # Do nothing if we know keep_prob == 1
+        if tensor_util.constant_value(keep_prob) == 1:
+          return x, None
+
+        noise_shape = noise_shape if noise_shape is not None else array_ops.shape(x)
+        # uniform [keep_prob, 1.0 + keep_prob)
+        random_tensor = keep_prob
+        random_tensor += random_ops.random_uniform(noise_shape,
+                                                   seed=seed,
+                                                   dtype=x.dtype)
+        # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
+        binary_tensor = math_ops.floor(random_tensor)
+    else:
+        # check if binary_tensor is a tensor with right shape
+        binary_tensor = math_ops.cast(binary_tensor, dtype=x.dtype)
+        #pass
+
+    ret = math_ops.div(x, keep_prob) * binary_tensor
+    if context.in_graph_mode():
+        ret.set_shape(x.get_shape())
+    return ret, binary_tensor
