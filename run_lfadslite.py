@@ -53,6 +53,8 @@ MAX_GRAD_NORM = 200.0
 CELL_CLIP_VALUE = 5.0
 KEEP_PROB = 0.95
 KEEP_RATIO = 0.95
+CV_KEEP_RATIO = 0.8
+
 OUTPUT_DIST = 'poisson' # 'poisson' or 'gaussian'
 
 DATA_DIR = "/tmp/rnn_synth_data_v1.0/"
@@ -257,6 +259,10 @@ flags.DEFINE_float("keep_prob", KEEP_PROB, "Dropout keep probability.")
 # COORDINATED DROPOUT
 flags.DEFINE_float("keep_ratio", KEEP_RATIO, "Coordinated Dropout input keep probability.")
 
+# CROSS-VALIDATION
+flags.DEFINE_float("cv_keep_ratio", CV_KEEP_RATIO, "Cross-validation keep probability.")
+
+
 # UNDERFITTING
 # If the primary task of LFADS is "filtering" of data and not
 # generation, then it is possible that the KL penalty is too strong.
@@ -429,6 +435,7 @@ def build_hyperparameter_dict(flags):
   # Overfitting
   d['keep_prob'] = flags.keep_prob
   d['keep_ratio'] = flags.keep_ratio
+  d['cv_keep_ratio'] = flags.cv_keep_ratio
   d['l2_gen_scale'] = flags.l2_gen_scale
   d['l2_con_scale'] = flags.l2_con_scale
   d['l2_ic_enc_scale'] = flags.l2_ic_enc_scale

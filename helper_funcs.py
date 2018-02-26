@@ -8,6 +8,7 @@ import tensorflow as tf
 import os
 import h5py
 import json
+import sys
 
 
 def kind_dict_definition():
@@ -32,7 +33,11 @@ def kind_dict_key(kind_number):
             if val == kind_number:
                 return key
 
-            
+def printer(data):
+    # prints on the same line
+    sys.stdout.write("\r\x1b[K" + data.__str__())
+    sys.stdout.flush()
+
 def write_data(data_fname, data_dict, use_json=False, compression=None):
   """Write data in HDF5 format.
 
@@ -377,14 +382,14 @@ class BidirectionalDynamicRNN(object):
         # for some reason I can't get dynamic_rnn to work without inputs
         #  so generate fake inputs if needed...
         if inputs is None:
-            inputs = tf.zeros( [batch_size, max(sequence_lengths), 1],
+            inputs = tf.zeros( [batch_size, sequence_lengths, 1],
                                dtype=tf.float32)
             
         self.states, self.last = tf.nn.bidirectional_dynamic_rnn(
             cell_fw = self.cell,
             cell_bw = self.cell,
             dtype = tf.float32,
-            sequence_length = sequence_lengths,
+            #sequence_length = sequence_lengths,
             inputs = inputs,
             initial_state_fw = self.init_fw,
             initial_state_bw = self.init_bw,
@@ -464,13 +469,13 @@ class DynamicRNN(object):
         # for some reason I can't get dynamic_rnn to work without inputs
         #  so generate fake inputs if needed...
         if inputs is None:
-            inputs = tf.zeros( [batch_size, max(sequence_lengths), 1],
+            inputs = tf.zeros( [batch_size, sequence_lengths, 1],
                                dtype=tf.float32)
         # call dynamic_rnn
         self.states, self.last = tf.nn.dynamic_rnn(
             cell = self.cell,
             dtype = tf.float32,
-            sequence_length = sequence_lengths,
+            #sequence_length = sequence_lengths,
             inputs = inputs,
             initial_state = self.init,
         )
