@@ -382,8 +382,11 @@ class LFADS(object):
         # total rec cost (avg over all trials in batch)
         #self.log_p_valid = tf.reduce_mean( self.log_p_b_valid, [0])
         #self.rec_cost_valid = -self.log_p_valid
-        self.rec_cost_valid = - (1. / (1. - self.cv_keep_ratio)) * \
-                              tf.reduce_sum(self.loglikelihood_b_t * (1. - self.cv_binary_mask)) / tf.cast(graph_batch_size, tf.float32)
+        if self.cv_keep_ratio != 1.0:
+            self.rec_cost_valid = - (1. / (1. - self.cv_keep_ratio)) * \
+                                  tf.reduce_sum(self.loglikelihood_b_t * (1. - self.cv_binary_mask)) / tf.cast(graph_batch_size, tf.float32)
+        else:
+            self.rec_cost_valid = tf.constant(np.nan)
         #self.rec_cost_valid = - tf.reduce_sum(self.loglikelihood_b_t * (1. - self.cv_binary_mask)) / graph_batch_size
         #self.rec_cost_valid /= (1. - ones_ratio)
 
