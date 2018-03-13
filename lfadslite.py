@@ -709,12 +709,10 @@ class LFADS(object):
                0, val_recon_cost, samp_val, 0, val_kl_cost,
                kl_weight))
         # pre-load the lve checkpoint (used in case of loaded checkpoint)
-
         self.lve = val_recon_cost
-	self.trial_recon_cost = np.nan
-	self.samp_recon_cost = np.nan
-
-        coef = 0.8 # smoothing coefficient - lower values mean more smoothing
+        self.trial_recon_cost = np.nan
+        self.samp_recon_cost = np.nan
+        coef = 0.9 # smoothing coefficient - lower values mean more smoothing
 
         while True:
             new_lr = self.get_learning_rate()

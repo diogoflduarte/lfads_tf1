@@ -52,8 +52,9 @@ CON_FAC_IN_DIM = 10
 MAX_GRAD_NORM = 200.0
 CELL_CLIP_VALUE = 5.0
 KEEP_PROB = 0.95
-KEEP_RATIO = 0.95
-CV_KEEP_RATIO = 0.8
+KEEP_RATIO = 1.0
+CV_KEEP_RATIO = 1.0
+CV_RAND_SEED = 0.0
 
 OUTPUT_DIST = 'poisson' # 'poisson' or 'gaussian'
 
@@ -262,6 +263,10 @@ flags.DEFINE_float("keep_ratio", KEEP_RATIO, "Coordinated Dropout input keep pro
 # CROSS-VALIDATION
 flags.DEFINE_float("cv_keep_ratio", CV_KEEP_RATIO, "Cross-validation keep probability.")
 
+# CROSS-VALIDATION RANDOM SEED
+flags.DEFINE_float("cv_rand_seed", CV_RAND_SEED, "Random seed for held-out cross-validation sample mask.")
+
+
 
 # UNDERFITTING
 # If the primary task of LFADS is "filtering" of data and not
@@ -436,6 +441,7 @@ def build_hyperparameter_dict(flags):
   d['keep_prob'] = flags.keep_prob
   d['keep_ratio'] = flags.keep_ratio
   d['cv_keep_ratio'] = flags.cv_keep_ratio
+  d['cv_rand_seed'] = flags.cv_rand_seed
   d['l2_gen_scale'] = flags.l2_gen_scale
   d['l2_con_scale'] = flags.l2_con_scale
   d['l2_ic_enc_scale'] = flags.l2_ic_enc_scale
