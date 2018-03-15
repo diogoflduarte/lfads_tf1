@@ -100,12 +100,6 @@ class LFADS(object):
         
         self.cv_keep_ratio = hps['cv_keep_ratio']
 
-        # single-sample cross-validation mask
-        # generate one random mask once when building the graph
-        # uniform [cv_keep_ratio, 1.0 + cv_keep_ratio)
-        if hps.cv_rand_seed:
-            np.random.seed(int(hps.cv_rand_seed))
-
         ## do per-session stuff
         for d, name in enumerate( dataset_names ):
             data_dim = hps.dataset_dims[name]
@@ -150,7 +144,14 @@ class LFADS(object):
                 fns_in_fac_Ws[d] = makelambda(in_fac_W)
                 fns_in_fac_bs[d] = makelambda(in_fac_b)
                 
+            # single-sample cross-validation mask
+            # generate one random mask once (for each dataset) when building the graph
+            # use a different (but deterministic) random seed for each dataset (hence adding 'd' below)
+            if hps.cv_rand_seed:
+                np.random.seed( int(hps.cv_rand_seed) + d)
+
             # Step 2) make a cross-validation random mask for each dataset
+            # uniform [cv_keep_ratio, 1.0 + cv_keep_ratio)
             random_mask_np_this_dataset = self.cv_keep_ratio + np.random.rand(hps['num_steps'], hps.dataset_dims[ name ])
             # convert to 0 and 1
             random_mask_np_this_dataset = np.floor(random_mask_np_this_dataset)
@@ -158,6 +159,9 @@ class LFADS(object):
             # converting to tensor
             fns_cv_binary_masks[ d ] = makelambda( tf.convert_to_tensor(self.random_masks_np[ d ], dtype=tf.float32) )
 
+            #reset the np random seed to enforce randomness for the other random draws
+            np.random.seed()
+            
             # Step 3) output matrix stuff
             out_mat_fxc = None
             out_bias_1xc = None
@@ -198,8 +202,6 @@ class LFADS(object):
         this_dataset_out_fac_b = _case_with_no_default( pf_pairs_out_fac_bs )
         this_dataset_cv_binary_mask = _case_with_no_default( pf_pairs_cv_binary_masks )
                 
-        #reset the np random seed (CP: why? no idea)
-        np.random.seed()
 
         
         
@@ -221,8 +223,8 @@ class LFADS(object):
             masked_dataset_ph = self.dataset_ph
 
         # replicate the cross-validation binary mask for this dataset for all elements of the batch
-        self.cv_binary_mask = tf.expand_dims(tf.ones([graph_batch_size, 1]), 1) * \
-                         this_dataset_cv_binary_mask
+        self.cv_binary_mask_batch = tf.expand_dims(tf.ones([graph_batch_size, 1]), 1) * \
+                                    this_dataset_cv_binary_mask
         
         # apply cross-validation dropout
         masked_dataset_ph = tf.div(masked_dataset_ph, self.cv_keep_ratio) * self.cv_binary_mask
@@ -491,9 +493,9 @@ class LFADS(object):
         ## calculate reconstruction cost
         # get final mask for gradient blocking
         if hps['keep_ratio'] != 1.0:
-            grad_binary_mask = this_dataset_cv_binary_mask * (1. - coor_drop_binary_mask)
+            grad_binary_mask = self.cv_binary_mask_batch * (1. - coor_drop_binary_mask)
         else:
-            grad_binary_mask = this_dataset_cv_binary_mask
+            grad_binary_mask = self.cv_binary_mask_batch
 
         # block gradients for coordinated dropout and cross-validation
         if hps.output_dist.lower() == 'poisson':
@@ -508,30 +510,30 @@ class LFADS(object):
         # cost for each trial
 
         #self.log_p_b_train =  (1. / self.cv_keep_ratio)**2 * tf.reduce_mean(
-        #    tf.reduce_mean(self.loglikelihood_b_t * self.cv_binary_mask, [2] ), [1] )
+        #    tf.reduce_mean(self.loglikelihood_b_t * self.cv_binary_mask_batch, [2] ), [1] )
         # total rec cost (avg over all trials in batch)
         #self.log_p_train = tf.reduce_mean( self.log_p_b_train, [0])
         #self.rec_cost_train = -self.log_p_train
-        #ones_ratio = tf.reduce_mean(self.cv_binary_mask)
+        #ones_ratio = tf.reduce_mean(self.cv_binary_mask_batch)
 
         self.rec_cost_train = - (1. / self.cv_keep_ratio) * \
-                              tf.reduce_sum(self.loglikelihood_b_t * self.cv_binary_mask) / tf.cast(graph_batch_size, tf.float32)
-        #self.rec_cost_train = - tf.reduce_sum(self.loglikelihood_b_t * self.cv_binary_mask) / graph_batch_size
+                              tf.reduce_sum(self.loglikelihood_b_t * self.cv_binary_mask_batch) / tf.cast(graph_batch_size, tf.float32)
+        #self.rec_cost_train = - tf.reduce_sum(self.loglikelihood_b_t * self.cv_binary_mask_batch) / graph_batch_size
         #self.rec_cost_train /= ones_ratio
 
 
         # Valid cost for each trial
         #self.log_p_b_valid = (1. / (1. - self.cv_keep_ratio))**2 * tf.reduce_mean(
-        #    tf.reduce_mean(self.loglikelihood_b_t * (1. - self.cv_binary_mask), [2] ), [1] )
+        #    tf.reduce_mean(self.loglikelihood_b_t * (1. - self.cv_binary_mask_batch), [2] ), [1] )
         # total rec cost (avg over all trials in batch)
         #self.log_p_valid = tf.reduce_mean( self.log_p_b_valid, [0])
         #self.rec_cost_valid = -self.log_p_valid
         if self.cv_keep_ratio != 1.0:
             self.rec_cost_valid = - (1. / (1. - self.cv_keep_ratio)) * \
-                                  tf.reduce_sum(self.loglikelihood_b_t * (1. - self.cv_binary_mask)) / tf.cast(graph_batch_size, tf.float32)
+                                  tf.reduce_sum(self.loglikelihood_b_t * (1. - self.cv_binary_mask_batch)) / tf.cast(graph_batch_size, tf.float32)
         else:
             self.rec_cost_valid = tf.constant(np.nan)
-        #self.rec_cost_valid = - tf.reduce_sum(self.loglikelihood_b_t * (1. - self.cv_binary_mask)) / graph_batch_size
+        #self.rec_cost_valid = - tf.reduce_sum(self.loglikelihood_b_t * (1. - self.cv_binary_mask_batch)) / graph_batch_size
         #self.rec_cost_valid /= (1. - ones_ratio)
 
 
