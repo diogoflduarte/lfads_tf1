@@ -42,10 +42,18 @@ LEARNING_RATE_STOP = 0.00001
 LEARNING_RATE_N_TO_COMPARE = 6
 DO_RESET_LEARNING_RATE = False
 
+# flag to only allow training of the encoder (i.e., lock the generator, factors readout, rates readout, controller, etc weights)
+DO_TRAIN_ENCODER_ONLY = False
+# flag to allow training the readin (alignment) matrices (only used in cases where alignment matrices are used
+DO_TRAIN_READIN = True
+
 # lfadslite parameter - sets the dimensionality between ci_enc and controller
 CON_CI_ENC_IN_DIM = 10
 # lfadslite parameter - sets the dimensionality between factors and controller
 CON_FAC_IN_DIM = 10
+# lfadslite param -
+#     sets whether there is an "input_factors" layer (for multi-session data, or even if you want to reduce the dimensionality of a single session)
+IN_FACTORS_DIM = 0
 
 
 # Calibrated just above the average value for the rnn synthetic data.
@@ -129,6 +137,10 @@ flags.DEFINE_integer("ic_dim", IC_DIM, "Dimension of h0")
 # data.
 flags.DEFINE_integer("factors_dim", FACTORS_DIM,
                      "Number of factors from generator")
+# The input factors decide the dimensionality of the data that the encoders see
+# This is critical for multi-session data, where the encoders must see a consistent input dimensionality across sessions
+flags.DEFINE_integer("in_factors_dim", IN_FACTORS_DIM,
+                     "Number of 'input factors' (encoders read from these)")
 flags.DEFINE_integer("ic_enc_dim", IC_ENC_DIM,
                      "Cell hidden size, encoder of h0")
 
@@ -250,6 +262,27 @@ flags.DEFINE_float("max_grad_norm", MAX_GRAD_NORM,
 # problems.
 flags.DEFINE_float("cell_clip_value", CELL_CLIP_VALUE,
                    "Max value recurrent cell can take before being clipped.")
+
+# This flag is used for an experiment where one wants to know if the dynamics
+# learned by the generator generalize across conditions. In that case, you might
+# train up a model on one set of data, and then only further train the encoder on 
+# another set of data (the conditions to be tested) so that the model is forced
+# to use the same dynamics to describe that data.
+# If you don't care about that particular experiment, this flag should always be
+# false.
+flags.DEFINE_boolean("do_train_encoder_only", DO_TRAIN_ENCODER_ONLY,
+                     "Train only the encoder weights.")
+
+
+# for multi-session "stitching" models, the per-session readin matrices map from
+# neurons to input factors which are fed into the shared encoder. These are
+# initialized by alignment_matrix_cxf and alignment_bias_c in the input .h5
+# files. They can be fixed or made trainable.
+flags.DEFINE_boolean("do_train_readin", DO_TRAIN_READIN, "Whether to train the \
+                     readin matrices and bias vectors. False leaves them fixed \
+                     at their initial values specified by the alignment \
+                     matrices and vectors.")
+
 
 
 # OVERFITTING
@@ -414,6 +447,7 @@ def build_hyperparameter_dict(flags):
   #lfadslite
   d['con_ci_enc_in_dim'] = flags.con_ci_enc_in_dim
   d['con_fac_in_dim'] = flags.con_fac_in_dim
+  d['in_factors_dim'] = flags.in_factors_dim
 
   # KL distributions
   d['ic_prior_var'] = flags.ic_prior_var
@@ -437,6 +471,10 @@ def build_hyperparameter_dict(flags):
   d['max_grad_norm'] = flags.max_grad_norm
   d['cell_clip_value'] = flags.cell_clip_value
 
+  # training options
+  d['do_train_encoder_only']  = flags.do_train_encoder_only
+  d['do_train_readin']  = flags.do_train_readin
+  
   # Overfitting
   d['keep_prob'] = flags.keep_prob
   d['keep_ratio'] = flags.keep_ratio
@@ -657,6 +695,13 @@ def main(_):
   hps.num_steps = datasets.values()[0]['num_steps']
   hps.ndatasets = len(hps.dataset_names)
 
+
+  # we require that in_factors_dim is set if multi-session is used
+  if hps.in_factors_dim ==0 and hps.ndatasets > 1:
+      raise SyntaxError('For multi-session data, must define in_factors_dim (this is specific to lfadslite)')
+    
+
+  
   # CP: not implemented in lfadslite
 #  if hps.num_steps_for_gen_ic > hps.num_steps:
 #    hps.num_steps_for_gen_ic = hps.num_steps

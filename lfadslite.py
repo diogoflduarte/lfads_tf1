@@ -22,6 +22,18 @@ from customcells import CustomGRUCell
 from helper_funcs import dropout
 
 
+# this will be used to store matrices/vectors for use in tf.case statements
+def makelambda(v):          # Used with tf.case
+    return lambda: v
+
+# this is used to setup a selector that is session-specific
+# it's a wrapper around tf.case, ensures there is no default (returns error if default is reached)
+def _case_with_no_default(pairs):
+    def _default_value_fn():
+        with tf.control_dependencies([tf.Assert(False, ["Reached default"])]):
+            return tf.identity(pairs[0][1]())
+    return tf.case(pairs, _default_value_fn, exclusive=True)
+
 
 class LFADS(object):
 
@@ -42,23 +54,19 @@ class LFADS(object):
         self.learning_rate_decay_op = self.learning_rate.assign(\
             self.learning_rate * hps['learning_rate_decay_factor'])
 
-
         ### BEGIN MODEL CONSTRUCTION
 
-        # figure out the input (dataset) dimensionality
-        # TODO: adjust so this can handle multiple datasets
-        allsets = hps['dataset_dims'].keys()
-        self.input_dim = hps['dataset_dims'][allsets[0]]
-        self.cv_keep_ratio =  hps['cv_keep_ratio']
+        # NOTE: the graph differs slightly on the input side depending on whether there are multiple datasets or not
+        #  if multiple datasets (or if input_factors_dim is defined), there must be an 'input factors' layer
+        #  - this sets a common dimension across datasets, allowing datasets to have different sizes
+        #  if not multiple datasets and no input_factors_dim is defined, we'll hook data straight to encoders
 
-        # everybody uses this variable to get the batch size
-        # in the future, this could be dynamic 
-        graph_batch_size = hps['batch_size']
-
-        # define all placeholders
+       # define all placeholders
         with tf.variable_scope('placeholders'):
             # input data (what are we training on)
-            self.dataset_ph = tf.placeholder(tf.float32, shape = [None, hps['num_steps'], self.input_dim], name='input_data')
+            # we're going to try setting input dimensionality to None
+            #  so datasets with different sizes can be used
+            self.dataset_ph = tf.placeholder(tf.float32, shape = [None, hps['num_steps'], None], name='input_data')
             # dropout keep probability
             #   enumerated in helper_funcs.kind_dict
             self.keep_prob = tf.placeholder(tf.float32, name='keep_prob')
@@ -70,21 +78,139 @@ class LFADS(object):
             # name of the dataset
             self.dataName = tf.placeholder(tf.string, shape=(), name='dataset_name')
 
-        graph_batch_size = tf.shape(self.dataset_ph)[0]
+         
+        # make placeholders for all the input and output adapter matrices
+        ndatasets = hps.ndatasets
+        # preds will be used to select elements of each session
+        self.preds = preds = [None] * ndatasets
+        self.fns_in_fac_Ws = fns_in_fac_Ws = [None] * ndatasets
+        self.fns_in_fac_bs = fns_in_fac_bs = [None] * ndatasets
+        self.fns_out_fac_Ws = fns_out_fac_Ws = [None] * ndatasets
+        self.fns_out_fac_bs = fns_out_fac_bs = [None] * ndatasets
+        self.datasetNames = dataset_names = hps.dataset_names
+        # specific to lfadslite - need to make placeholders for the cross validation dropout masks
+        self.random_masks_np = random_masks_np = [None] * ndatasets
+        self.fns_cv_binary_masks = fns_cv_binary_masks = [None] * ndatasets
+        # ext_inputs are not yet implemented, but, placeholder for later
+        self.ext_inputs = ext_inputs = None
+        
+        # figure out the input (dataset) dimensionality
+        #allsets = hps['dataset_dims'].keys()
+        #self.input_dim = hps['dataset_dims'][allsets[0]]
+        
+        self.cv_keep_ratio = hps['cv_keep_ratio']
+
         # single-sample cross-validation mask
         # generate one random mask once when building the graph
         # uniform [cv_keep_ratio, 1.0 + cv_keep_ratio)
         if hps.cv_rand_seed:
             np.random.seed(int(hps.cv_rand_seed))
-        random_mask_np = self.cv_keep_ratio + np.random.rand(hps['num_steps'], self.input_dim)
+
+        ## do per-session stuff
+        for d, name in enumerate( dataset_names ):
+            data_dim = hps.dataset_dims[name]
+
+            # Step 0) define the preds comparator for this dataset
+            preds[ d ] = tf.equal( tf.constant( name ), self.dataName )
+            
+            # Step 1) alignment matrix stuff.
+            # the alignment matrix only matters if in_factors_dim is nonzero
+            if hps.in_factors_dim > 0:
+                in_mat_cxf = None
+                align_bias_1xc = None
+                in_bias_1xf = None
+            
+                # get the alignment_matrix if provided
+                if 'alignment_matrix_cxf' in datasets[ name ].keys():
+                    in_mat_cxf = datasets[ name ][ 'alignment_matrix_cxf'].astype( np.float32 )
+                    # check that sizing is appropriate
+                    if in_mat_cxf.shape != (data_dim, hps.in_factors_dim):
+                        raise ValueError("""Alignment matrix must have dimensions %d x %d
+                        (data_dim x factors_dim), but currently has %d x %d."""%
+                                         (data_dim, hps.infactors_dim, in_mat_cxf.shape[0],
+                                          in_mat_cxf.shape[1]))
+                if 'alignment_bias_c' in datasets[ name ].keys():
+                    align_bias_c = datasets[ name ][ 'alignment_bias_c'].astype( np.float32 )
+                    align_bias_1xc = np.expand_dims(align_bias_c, axis=0)
+                    if align_bias_1xc.shape[1] != data_dim:
+                        raise ValueError("""Alignment bias must have dimensions %d
+                        (data_dim), but currently has %d."""%
+                                         (data_dim, in_mat_cxf.shape[0]))
+                if in_mat_cxf is not None and align_bias_1xc is not None:
+                    # (data - alignment_bias) * W_in
+                    # data * W_in - alignment_bias * W_in
+                    # So b = -alignment_bias * W_in to accommodate PCA style offset.
+                    in_bias_1xf = -np.dot(align_bias_1xc, in_mat_cxf)
+                # initialize a linear transform based on the above
+                in_fac_linear = init_linear_transform( data_dim, hps.in_factors_dim, mat_init_value=in_mat_cxf,
+                                                       bias_init_value=in_bias_1xf,
+                                                       name= name+'_in_fac_linear' )
+                in_fac_W, in_fac_b = in_fac_linear
+                # to store per-session matrices/biases for later use, need to use 'makelambda'
+                fns_in_fac_Ws[d] = makelambda(in_fac_W)
+                fns_in_fac_bs[d] = makelambda(in_fac_b)
+                
+            # Step 2) make a cross-validation random mask for each dataset
+            random_mask_np_this_dataset = self.cv_keep_ratio + np.random.rand(hps['num_steps'], hps.dataset_dims[ name ])
+            # convert to 0 and 1
+            random_mask_np_this_dataset = np.floor(random_mask_np_this_dataset)
+            random_masks_np[ d ] = random_mask_np_this_dataset
+            # converting to tensor
+            fns_cv_binary_masks[ d ] = makelambda( tf.convert_to_tensor(self.random_masks_np[ d ], dtype=tf.float32) )
+
+            # Step 3) output matrix stuff
+            out_mat_fxc = None
+            out_bias_1xc = None
+            
+            # if input and output factors dims match, can initialize output matrices using transpose of input matrices
+            if in_mat_cxf is not None:
+                if hps.in_factors_dim==hps.factors_dim:
+                    out_mat_fxc = in_mat_cxf.T
+            if align_bias_1xc is not None:
+                out_bias_1xc = align_bias_1xc
+            
+            if hps.output_dist.lower() == 'poisson':
+                output_size = data_dim
+            elif hps.output_dist.lower() == 'gaussian':
+                output_size = data_dim * 2
+                if out_mat_fxc is not None:
+                    out_mat_fxc = tf.concat( [ out_mat_fxc, out_mat_fxc ], 0 )
+                if out_bias_1xc is not None:
+                    out_bias_1xc = tf.concat( [ out_bias_1xc, out_bias_1xc ], 0 )
+            out_fac_linear = init_linear_transform( hps.factors_dim, output_size, mat_init_value=out_mat_fxc,
+                                                   bias_init_value=out_bias_1xc,
+                                                   name= name+'_out_fac_linear' )
+            out_fac_W, out_fac_b = out_fac_linear
+            fns_out_fac_Ws[d] = makelambda(out_fac_W)
+            fns_out_fac_bs[d] = makelambda(out_fac_b)
+
+        # now 'zip' together the 'pred' selector with all the function handles
+        pf_pairs_in_fac_Ws = zip(preds, fns_in_fac_Ws)
+        pf_pairs_in_fac_bs = zip(preds, fns_in_fac_bs)
+        pf_pairs_out_fac_Ws = zip(preds, fns_out_fac_Ws)
+        pf_pairs_out_fac_bs = zip(preds, fns_out_fac_bs)
+        pf_pairs_cv_binary_masks = zip(preds, fns_cv_binary_masks )
+
+        # now, choose the ones for this session
+        this_dataset_in_fac_W = _case_with_no_default( pf_pairs_in_fac_Ws )
+        this_dataset_in_fac_b = _case_with_no_default( pf_pairs_in_fac_bs )
+        this_dataset_out_fac_W = _case_with_no_default( pf_pairs_out_fac_Ws )
+        this_dataset_out_fac_b = _case_with_no_default( pf_pairs_out_fac_bs )
+        this_dataset_cv_binary_mask = _case_with_no_default( pf_pairs_cv_binary_masks )
+                
+        #reset the np random seed (CP: why? no idea)
         np.random.seed()
 
-        # convert to 0 and 1
-        self.random_mask_np = np.floor(random_mask_np)
-        # converting to tensor and replicating the CV mask for all the batches
-        self.cv_binary_mask = tf.expand_dims(tf.ones([graph_batch_size, 1]), 1) * \
-                         tf.convert_to_tensor(self.random_mask_np, dtype=tf.float32)
         
+        
+        # batch_size - read from the data placeholder
+        graph_batch_size = tf.shape(self.dataset_ph)[0]
+
+        # can we infer the data dimensionality for the random mask?
+        data_dim_tensor = tf.shape(self.dataset_ph)[2]
+        dataset_dims = self.dataset_ph.get_shape()
+        data_dim = dataset_dims[2]
+        print(data_dim)
         
         # coordinated dropout
         if hps['keep_ratio'] != 1.0:
@@ -94,9 +220,25 @@ class LFADS(object):
             # no coordinated dropout
             masked_dataset_ph = self.dataset_ph
 
+        # replicate the cross-validation binary mask for this dataset for all elements of the batch
+        self.cv_binary_mask = tf.expand_dims(tf.ones([graph_batch_size, 1]), 1) * \
+                         this_dataset_cv_binary_mask
+        
         # apply cross-validation dropout
         masked_dataset_ph = tf.div(masked_dataset_ph, self.cv_keep_ratio) * self.cv_binary_mask
-        
+
+        # define input to encoders
+        if hps.in_factors_dim==0:
+            self.input_to_encoders = masked_dataset_ph
+        else:
+            input_factors_object = LinearTimeVarying(inputs = masked_dataset_ph,
+                                                    output_size = hps.in_factors_dim,
+                                                    transform_name = 'data_2_infactors',
+                                                    output_name = 'infactors',
+                                                    W = this_dataset_in_fac_W,
+                                                    b = this_dataset_in_fac_b,
+                                                    nonlinearity = None)
+            self.input_to_encoders = input_factors_object.output
             
         with tf.variable_scope('ic_enc'):
             ic_enc_cell = CustomGRUCell(num_units = hps['ic_enc_dim'],\
@@ -112,10 +254,11 @@ class LFADS(object):
                 name = 'ic_enc',
                 sequence_lengths = seq_len,
                 cell = ic_enc_cell,
-                inputs = masked_dataset_ph,
+                inputs = self.input_to_encoders,
                 initial_state = None,
                 rnn_type = 'customgru',
                 output_keep_prob = self.keep_prob)
+            #    inputs = masked_dataset_ph,
 
             # map the ic_encoder onto the actual ic layer
             self.gen_ics_posterior = DiagonalGaussianFromInput(
@@ -181,10 +324,11 @@ class LFADS(object):
                     name = 'ci_enc',
                     sequence_lengths = seq_len,
                     cell = ci_enc_cell,
-                    inputs = masked_dataset_ph,
+                    inputs = self.input_to_encoders,
                     initial_state = None,
                     rnn_type = 'customgru',
                     output_keep_prob = self.keep_prob)
+                #    inputs = masked_dataset_ph,
 
                 if not hps['do_causal_controller']:
                     self.ci_enc_rnn_states = self.ci_enc_rnn_obj.states
@@ -283,10 +427,8 @@ class LFADS(object):
             ## "rates" - more properly called "output_distribution"
             if hps.output_dist.lower() == 'poisson':
                 nonlin = 'exp'
-                output_size = self.input_dim
             elif hps.output_dist.lower() == 'gaussian':
                 nonlin = None
-                output_size = self.input_dim * 2
             else:
                 raise NameError("Unknown output distribution: " + hps.output_dist)
                 
@@ -295,6 +437,8 @@ class LFADS(object):
                                              output_size = output_size,
                                              transform_name = 'factors_2_rates',
                                              output_name = 'rates_concat',
+                                             W = this_dataset_out_fac_W,
+                                             b = this_dataset_out_fac_b,
                                              nonlinearity = nonlin)
 
             # select the relevant part of the output depending on model type
@@ -432,6 +576,11 @@ class LFADS(object):
 
         # get the list of trainable variables
         self.trainable_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+
+        #TODO - make sure input matrix / bias is not on list of trainable vars if that's not what we want
+        if hps.do_train_readin==False:
+            raise SyntaxError(' have not yet implemented the do_train_readin = False case... ')
+        
         self.gradients = tf.gradients(self.total_cost, self.trainable_vars)
         self.gradients, self.grad_global_norm = \
                                                 tf.clip_by_global_norm(

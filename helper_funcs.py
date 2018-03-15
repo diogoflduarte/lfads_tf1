@@ -74,7 +74,7 @@ def write_data(data_fname, data_dict, use_json=False, compression=None):
 
 
 
-def init_linear_transform(in_size, out_size, name=None, collections=None):
+def init_linear_transform(in_size, out_size, name=None, collections=None, mat_init_value=None, bias_init_value=None):
 # generic function (we use linear transforms in a lot of places)
 # initialize the weights of the linear transformation based on the size of the inputs
     
@@ -213,11 +213,11 @@ def linear2(x, out_size, do_bias=True, alpha=1.0, identity_if_possible=False,
     return tf.matmul(x, W)
 
 
-def linear(x, out_size, name, collections=None):
+def linear(x, out_size, name, collections=None, mat_init_value=None, bias_init_value=None):
 # generic function (we use linear transforms in a lot of places)
 # initialize the weights of the linear transformation based on the size of the inputs
     in_size = int(x.get_shape()[1])
-    W,b = init_linear_transform(in_size, out_size, name=name, collections=collections)
+    W,b = init_linear_transform(in_size, out_size, name=name, collections=collections, mat_init_value=mat_init_value, bias_init_value=bias_init_value)
     return tf.matmul(x, W) + b
 
 
@@ -486,14 +486,23 @@ class LinearTimeVarying(object):
     # self.output_nl = nonlinear transform
     
     def __init__(self, inputs, output_size, transform_name, output_name, nonlinearity = None,
-                 collections=None):
+                 collections=None, W=None, b=None):
         num_timesteps = tf.shape(inputs)[1]
         # must return "as_list" to get ints
         input_size = inputs.get_shape().as_list()[2]
         outputs = []
         outputs_nl = []
-        self.W,self.b = init_linear_transform(input_size, output_size, name=transform_name,
-                                              collections=collections)
+        # use any matrices provided, if they exist
+        if W is not None and b is None:
+            raise ValueError('LinearTimeVarying: must provide either W and b, or neither')
+        if W is None and b is not None:
+            raise ValueError('LinearTimeVarying: must provide either W and b, or neither')
+
+        if W is None and b is None:
+            W,b = init_linear_transform(input_size, output_size, name=transform_name,
+                                        collections=collections)
+        self.W = W
+        self.b = b
 
         inputs_permuted = tf.transpose(inputs, perm=[1, 0, 2])
         initial_outputs = tf.TensorArray(dtype=tf.float32, size=num_timesteps, name='init_linear_outputs')
