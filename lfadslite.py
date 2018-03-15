@@ -491,12 +491,12 @@ class LFADS(object):
         ## calculate reconstruction cost
         # get final mask for gradient blocking
         if hps['keep_ratio'] != 1.0:
-            grad_binary_mask = self.cv_binary_mask * (1. - coor_drop_binary_mask)
+            grad_binary_mask = this_dataset_cv_binary_mask * (1. - coor_drop_binary_mask)
         else:
-            grad_binary_mask = self.cv_binary_mask
+            grad_binary_mask = this_dataset_cv_binary_mask
 
+        # block gradients for coordinated dropout and cross-validation
         if hps.output_dist.lower() == 'poisson':
-            # block gradients for coordinated dropout and cross-validation
             masked_logrates = entry_stop_gradients(self.logrates, grad_binary_mask)
             self.loglikelihood_b_t = Poisson(masked_logrates).logp(self.dataset_ph)
         elif hps.output_dist.lower() == 'gaussian':
