@@ -109,11 +109,10 @@ class LFADS(object):
             
             # Step 1) alignment matrix stuff.
             # the alignment matrix only matters if in_factors_dim is nonzero
+            in_mat_cxf = None
+            align_bias_1xc = None
+            in_bias_1xf = None
             if hps.in_factors_dim > 0:
-                in_mat_cxf = None
-                align_bias_1xc = None
-                in_bias_1xf = None
-            
                 # get the alignment_matrix if provided
                 if 'alignment_matrix_cxf' in datasets[ name ].keys():
                     in_mat_cxf = datasets[ name ][ 'alignment_matrix_cxf'].astype( np.float32 )
@@ -196,8 +195,10 @@ class LFADS(object):
         pf_pairs_cv_binary_masks = zip(preds, fns_cv_binary_masks )
 
         # now, choose the ones for this session
-        this_dataset_in_fac_W = _case_with_no_default( pf_pairs_in_fac_Ws )
-        this_dataset_in_fac_b = _case_with_no_default( pf_pairs_in_fac_bs )
+        if hps.in_factors_dim > 0:
+            this_dataset_in_fac_W = _case_with_no_default( pf_pairs_in_fac_Ws )
+            this_dataset_in_fac_b = _case_with_no_default( pf_pairs_in_fac_bs )
+            
         this_dataset_out_fac_W = _case_with_no_default( pf_pairs_out_fac_Ws )
         this_dataset_out_fac_b = _case_with_no_default( pf_pairs_out_fac_bs )
         this_dataset_cv_binary_mask = _case_with_no_default( pf_pairs_cv_binary_masks )
@@ -577,11 +578,14 @@ class LFADS(object):
         
 
         # get the list of trainable variables
-        self.trainable_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-
-        #TODO - make sure input matrix / bias is not on list of trainable vars if that's not what we want
+        trainable_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
         if hps.do_train_readin==False:
-            raise SyntaxError(' have not yet implemented the do_train_readin = False case... ')
+            # filter out any variables with name containing '_in_fac_linear'
+            import re
+            regex = re.compile('.+_in_fac_linear.+')
+            trainable_vars = [i for i in trainable_vars if not regex.search(i.name)]
+
+        self.trainable_vars = trainable_vars
         
         self.gradients = tf.gradients(self.total_cost, self.trainable_vars)
         self.gradients, self.grad_global_norm = \
