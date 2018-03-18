@@ -227,7 +227,7 @@ class LFADS(object):
                                     this_dataset_cv_binary_mask
         
         # apply cross-validation dropout
-        masked_dataset_ph = tf.div(masked_dataset_ph, self.cv_keep_ratio) * self.cv_binary_mask
+        masked_dataset_ph = tf.div(masked_dataset_ph, self.cv_keep_ratio) * self.cv_binary_mask_batch
 
         # define input to encoders
         if hps.in_factors_dim==0:
@@ -1259,12 +1259,12 @@ class LFADS(object):
           data_tuple = [('train', data_dict['train_data']),
                         ('valid', data_dict['valid_data'])]
           for data_kind, data_extxd in data_tuple:
-            if output_fname is None:
+            if not output_fname:
               fname = "model_runs_" + data_name + '_' + data_kind + '_' + kind
             else:
               fname = output_fname + data_name + '_' + data_kind + '_' + kind
 
-            print("Writing data for %s data and kind %s." % (data_name, data_kind))
+            print("Writing data for %s data and kind %s to file %s." % (data_name, data_kind, fname))
             model_runs = self.eval_model_runs_avg_epoch(data_name, data_extxd)
             all_model_runs.append(model_runs)
             full_fname = os.path.join(hps.lfads_save_dir, fname)
