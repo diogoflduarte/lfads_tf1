@@ -69,7 +69,7 @@ def read_data(data_fname):
 
 
 def read_datasets(data_path, data_fname_stem):
-  """Read dataset sin HD5F format.
+  """Read datasets in HDF5 format.
 
   This function assumes the dataset_dict is a mapping ( string ->
   to data_dict ).  It calls write_data for each data dictionary,
@@ -105,7 +105,7 @@ def read_datasets(data_path, data_fname_stem):
 
 
 def write_data(data_fname, data_dict, use_json=False, compression=None):
-  """Write data in HD5F format.
+  """Write data in HDF5 format.
 
   Args:
     data_fname: The filename of teh file in which to write the data.
