@@ -1113,19 +1113,18 @@ class LFADS(object):
           E_to_process = E
 
         # make a bunch of placeholders to store the posterior sample means
+        gen_ics = np.array([]) # np.zeros([E_to_process, hps.gen_dim])
+        gen_states = np.array([]) #np.zeros([E_to_process, T, hps.gen_dim])
+        factors = np.array([]) #np.zeros([E_to_process, T, hps.factors_dim])
+        out_dist_params = np.array([]) #np.zeros([E_to_process, T, D])
         if hps.ic_dim > 0:
-            prior_g0_mean = [] #np.zeros([E_to_process, hps.ic_dim])
-            prior_g0_logvar = [] #np.zeros([E_to_process, hps.ic_dim])
-            post_g0_mean = [] #np.zeros([E_to_process, hps.ic_dim])
-            post_g0_logvar = [] #np.zeros([E_to_process, hps.ic_dim])
+            prior_g0_mean = np.array([]) #np.zeros([E_to_process, hps.ic_dim])
+            prior_g0_logvar = np.array([]) #np.zeros([E_to_process, hps.ic_dim])
+            post_g0_mean = np.array([]) #np.zeros([E_to_process, hps.ic_dim])
+            post_g0_logvar = np.array([]) #np.zeros([E_to_process, hps.ic_dim])
 
         if hps.co_dim > 0:
-            controller_outputs = [] #np.zeros([E_to_process, T, hps.co_dim])
-        gen_ics = [] # np.zeros([E_to_process, hps.gen_dim])
-        gen_states = [] #np.zeros([E_to_process, T, hps.gen_dim])
-        factors = [] #np.zeros([E_to_process, T, hps.factors_dim])
-
-        out_dist_params = [] #np.zeros([E_to_process, T, D])
+            controller_outputs = np.array([]) #np.zeros([E_to_process, T, hps.co_dim])
 
         #costs = np.zeros(E_to_process)
         #nll_bound_vaes = np.zeros(E_to_process)
@@ -1146,6 +1145,7 @@ class LFADS(object):
                                             do_average_batch=do_average_batch)
             # assemble a dict from the returns
             model_values = {}
+            # compile a list of variables "vars"
             vars = ['gen_ics', 'gen_states', 'factors', 'output_dist_params']
             if self.hps.ic_dim > 0:
                 vars.append('prior_g0_mean')
@@ -1155,63 +1155,56 @@ class LFADS(object):
             if self.hps.co_dim > 0:
                 vars.append('controller_outputs')
 
+            # put returned variables that were on the "vars" list into a "model_values" dict
             for idx in range( len(vars) ):
-                model_values[ vars[idx] ] = mv[idx] #, axis=0)
+                model_values[ vars[idx] ] = mv[idx] / pm_batch_size
 
-
-            #model_values['gen_ics'] = mv[idx]; idx += 1
-            #model_values['gen_states'] = mv[idx]; idx += 1
-            #model_values['factors'] = mv[idx]; idx += 1
-            #model_values['output_dist_params'] = mv[idx]; idx += 1
-            #if self.hps.ic_dim > 0:
-            #    model_values['prior_g0_mean'] = mv[idx]; idx += 1
-            #    model_values['prior_g0_logvar'] = mv[idx]; idx += 1
-            #    model_values['post_g0_mean'] = mv[idx]; idx += 1
-            #    model_values['post_g0_logvar'] = mv[idx]; idx += 1
-            #if self.hps.co_dim > 0:
-            #    model_values['controller_outputs'] = mv[idx]; idx += 1
+            # CP: the below used to append, and do a mean later
+            #   now switching to do the averaging in the loop to save memory
 
             # assign values to the arrays
-            if self.hps.ic_dim > 0:
-                prior_g0_mean.append(model_values['prior_g0_mean'])
-                prior_g0_logvar.append(model_values['prior_g0_logvar'])
-                post_g0_mean.append(model_values['post_g0_mean'])
-                post_g0_logvar.append(model_values['post_g0_logvar'])
-            gen_ics.append(model_values['gen_ics'])
+            #  if it's the first go 'round:
+            if not gen_ics.size:
+                gen_ics = model_values['gen_ics']
+                gen_states = model_values['gen_states']
+                factors = model_values['factors']
+                out_dist_params = model_values['output_dist_params']
+                if self.hps.ic_dim > 0:
+                    prior_g0_mean = model_values['prior_g0_mean']
+                    prior_g0_logvar = model_values['prior_g0_logvar']
+                    post_g0_mean = model_values['post_g0_mean']
+                    post_g0_logvar = model_values['post_g0_logvar']
+                if self.hps.co_dim > 0:
+                    controller_outputs = model_values['controller_outputs']
+            else:
+                gen_ics = gen_ics + model_values['gen_ics']
+                gen_states = gen_states + model_values['gen_states']
+                factors = factors + model_values['factors']
+                out_dist_params = out_dist_params + model_values['output_dist_params']
+                if self.hps.ic_dim > 0:
+                    prior_g0_mean = prior_g0_mean + model_values['prior_g0_mean']
+                    prior_g0_logvar = prior_g0_logvar + model_values['prior_g0_logvar']
+                    post_g0_mean = post_g0_mean + model_values['post_g0_mean']
+                    post_g0_logvar = post_g0_logvar + model_values['post_g0_logvar']
+                if self.hps.co_dim > 0:
+                    controller_outputs = controller_outputs + model_values['controller_outputs']
 
-            if self.hps.co_dim > 0:
-                controller_outputs.append(model_values['controller_outputs'])
-            gen_states.append(model_values['gen_states'])
-            factors.append(model_values['factors'])
-            out_dist_params.append(model_values['output_dist_params'])
-
-            ## these are from the original LFADS code, but not currently
-            # computed in this version
-
-            #costs[es_idx] = model_values['costs']
-            #nll_bound_vaes[es_idx] = model_values['nll_bound_vaes']
-            #nll_bound_iwaes[es_idx] = model_values['nll_bound_iwaes']
-            #train_steps[es_idx] = model_values['train_steps']
-            #print('bound nll(vae): %.3f, bound nll(iwae): %.3f' \
-            #      % (nll_bound_vaes[es_idx], nll_bound_iwaes[es_idx]))
         print("")
         model_runs = {}
+        model_runs['gen_ics'] = gen_ics
+        model_runs['gen_states'] = gen_states
+        model_runs['factors'] = factors
+        model_runs['output_dist_params'] = out_dist_params
         if self.hps.ic_dim > 0:
-            model_runs['prior_g0_mean'] = np.mean(prior_g0_mean, axis=0)
-            model_runs['prior_g0_logvar'] = np.mean(prior_g0_logvar, axis=0)
-            model_runs['post_g0_mean'] = np.mean(post_g0_mean, axis=0)
-            model_runs['post_g0_logvar'] = np.mean(post_g0_logvar, axis=0)
-            model_runs['gen_ics'] = np.mean(gen_ics, axis=0)
+            model_runs['prior_g0_mean'] = prior_g0_mean
+            model_runs['prior_g0_logvar'] = prior_g0_logvar
+            model_runs['post_g0_mean'] = post_g0_mean
+            model_runs['post_g0_logvar'] = post_g0_logvar
 
         if self.hps.co_dim > 0:
-            model_runs['controller_outputs'] = np.mean(controller_outputs, axis=0)
-        model_runs['gen_states'] = np.mean(gen_states, axis=0)
-        model_runs['factors'] = np.mean(factors, axis=0)
-        model_runs['output_dist_params'] = np.mean(out_dist_params, axis=0)
-        #model_runs['costs'] = np.mean(costs, axis=0)
-        #model_runs['nll_bound_vaes'] = np.mean(nll_bound_vaes, axis=0)
-        #model_runs['nll_bound_iwaes'] = np.mean(nll_bound_iwaes, axis=0)
-        #model_runs['train_steps'] = np.mean(train_steps, axis=0)
+            model_runs['controller_outputs'] = controller_outputs
+                                                   
+        # return the dict
         return model_runs
 
     def get_R2(self, data_true, data_est, mask):
