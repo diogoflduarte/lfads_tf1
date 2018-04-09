@@ -706,6 +706,6 @@ def dropout(x, keep_prob, noise_shape=None, seed=None, name=None,
         #pass
 
     ret = math_ops.div(x, keep_prob) * binary_tensor
-    if context.in_graph_mode():
-        ret.set_shape(x.get_shape())
+    #if context.in_graph_mode():
+    ret.set_shape(x.get_shape())
     return ret, binary_tensor
