@@ -239,6 +239,7 @@ class LFADS(object):
         
         # batch_size - read from the data placeholder
         graph_batch_size = tf.shape(self.dataset_ph)[0]
+        #graph_batch_size = self.dataset_ph.get_shape().as_list()[0]
 
         # can we infer the data dimensionality for the random mask?
         #data_dim_tensor = tf.shape(self.dataset_ph)[2]
