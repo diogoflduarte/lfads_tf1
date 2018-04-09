@@ -120,7 +120,7 @@ class LFADS(object):
                     if in_mat_cxf.shape != (data_dim, hps.in_factors_dim):
                         raise ValueError("""Alignment matrix must have dimensions %d x %d
                         (data_dim x factors_dim), but currently has %d x %d."""%
-                                         (data_dim, hps.infactors_dim, in_mat_cxf.shape[0],
+                                         (data_dim, hps.in_factors_dim, in_mat_cxf.shape[0],
                                           in_mat_cxf.shape[1]))
                 if 'alignment_bias_c' in datasets[ name ].keys():
                     align_bias_c = datasets[ name ][ 'alignment_bias_c'].astype( np.float32 )
