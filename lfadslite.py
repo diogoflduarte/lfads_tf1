@@ -852,7 +852,7 @@ class LFADS(object):
         train_costs = []
 
         # print validation costs before the first training step
-        val_total_cost, val_recon_cost, samp_val, val_kl_cost = \
+        val_total_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, val_kl_cost = \
             self.valid_epoch(datasets,
                              kl_ic_weight=hps['kl_ic_weight'],
                              kl_co_weight=hps['kl_co_weight'])
@@ -861,13 +861,14 @@ class LFADS(object):
         print("Epoch:%d, step:%d (TRAIN, VALID): total: %.2f, %.2f\
         recon: %.2f, %.2f, %.2f,    kl: %.2f, %.2f, kl weight: %.2f" % \
               (-1, train_step, 0, val_total_cost,
-               0, val_recon_cost, samp_val, 0, val_kl_cost,
+               0, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, 0, val_kl_cost,
                kl_weight))
         # pre-load the lve checkpoint (used in case of loaded checkpoint)
-        self.lve = val_recon_cost
-        self.trial_recon_cost = np.nan
-        self.samp_recon_cost = np.nan
-        coef = 0.9 # smoothing coefficient - lower values mean more smoothing
+        self.lve = valid_set_heldin_samp_cost
+        self.trial_recon_cost = valid_set_heldin_samp_cost
+        self.samp_recon_cost = valid_set_heldout_samp_cost
+
+        coef = 0.8 # smoothing coefficient - lower values mean more smoothing
 
         while True:
             new_lr = self.get_learning_rate()
@@ -888,14 +889,15 @@ class LFADS(object):
                 do_save_ckpt = True if nepoch == (target_num_epochs-1) else do_save_ckpt
 
             start_time = time.time()
-            tr_total_cost, tr_recon_cost_train, tr_recon_cost_valid, tr_kl_cost = \
+            
+            tr_total_cost, train_set_heldin_samp_cost, train_set_heldout_samp_cost, tr_kl_cost = \
                 self.train_epoch(datasets, do_save_ckpt=do_save_ckpt,
                                  kl_ic_weight = hps['kl_ic_weight'],
                                  kl_co_weight = hps['kl_co_weight'])
             epoch_time = time.time() - start_time
             print("Elapsed time: %f" %epoch_time)
 
-            val_total_cost, trial_val_recon_cost_train, trial_val_recon_cost_valid, val_kl_cost = \
+            val_total_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, val_kl_cost = \
                 self.valid_epoch(datasets,
                                  kl_ic_weight = hps['kl_ic_weight'],
                                  kl_co_weight = hps['kl_co_weight'])
@@ -955,28 +957,38 @@ class LFADS(object):
 
             # initialize the running average
             if nepoch == 0:
-                smth_trial_val_recn_cost = trial_val_recon_cost_train
-                smth_samp_val_recn_cost = tr_recon_cost_valid
+                smth_trial_val_recn_cost = valid_set_heldin_samp_cost
+                smth_samp_val_recn_cost = train_set_heldout_samp_cost
 
             # recon cost over validation trials
-            smth_trial_val_recn_cost = (1. - coef) * smth_trial_val_recn_cost + coef * trial_val_recon_cost_train
+            smth_trial_val_recn_cost = (1. - coef) * smth_trial_val_recn_cost + coef * valid_set_heldin_samp_cost
             # recon cost over dropped samples
-            smth_samp_val_recn_cost = (1. - coef) * smth_samp_val_recn_cost + coef * tr_recon_cost_valid
+            smth_samp_val_recn_cost = (1. - coef) * smth_samp_val_recn_cost + coef * train_set_heldout_samp_cost
 
             kl_weight = hps['kl_ic_weight']
             train_step = session.run(self.train_step)
             print("Epoch:%d, step:%d (TRAIN, VALID_SAMP, VALID_TRIAL): total: %.4f, %.4f,\
             recon: %.4f, %.4f, %.4f, R^2 (T/V: Held-in, Held-out), %.3f, %.3f, %.3f, %.3f, kl: %.4f, %.4f, kl weight: %.4f" % \
                   (nepoch, train_step, tr_total_cost, val_total_cost,
-                   tr_recon_cost_train, tr_recon_cost_valid, trial_val_recon_cost_train,
+                   train_set_heldin_samp_cost, train_set_heldout_samp_cost, valid_set_heldin_samp_cost,
                    all_train_R2_heldin, all_train_R2_heldout, all_valid_R2_heldin, all_valid_R2_heldout,
                    tr_kl_cost, val_kl_cost,
                    kl_weight))
 
-            self.trial_recon_cost = smth_trial_val_recn_cost
-            self.samp_recon_cost = smth_samp_val_recn_cost
+            is_lve = smth_trial_val_recn_cost < self.lve
+
+            # Making parameters available for lfads_wrappper
+            if hps['checkpoint_pb_load_name'] == 'checkpoint_lve':
+                # if we are returning lve costs
+                if is_lve:
+                    self.trial_recon_cost = smth_trial_val_recn_cost
+                    self.samp_recon_cost = smth_samp_val_recn_cost
+            else:
+                self.trial_recon_cost = smth_trial_val_recn_cost
+                self.samp_recon_cost = smth_samp_val_recn_cost
+
             # MRK, moved this here to get the right for the checkpoint train_step
-            if smth_trial_val_recn_cost < self.lve:
+            if is_lve:
                 # new lowest validation error
                 self.lve = smth_trial_val_recn_cost
                 # MRK, make lve accessible from the model class
@@ -1004,7 +1016,7 @@ class LFADS(object):
                 recon,%.6E,%.6E,%.6E,%.6E, R^2 (Held-in, Held-out), %.6E, %.6E, %.6E, %.6E," \
                              "kl,%.6E,%.6E, l2,%.6E, klweight,%.6E, l2weight,%.6E\n"% \
                 (nepoch, train_step, tr_total_cost, val_total_cost,
-                 tr_recon_cost_train, tr_recon_cost_valid, trial_val_recon_cost_train, trial_val_recon_cost_valid,
+                 train_set_heldin_samp_cost, train_set_heldout_samp_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost,
                  all_train_R2_heldin, all_train_R2_heldout, all_valid_R2_heldin, all_valid_R2_heldout,
                  tr_kl_cost, val_kl_cost, l2_cost, kl_weight, l2_weight)
                 # log to file
@@ -1233,7 +1245,7 @@ class LFADS(object):
         R2_heldin = np.corrcoef(true_flat[mask], est_flat[mask])**2.0
         R2_heldout = np.corrcoef(true_flat[np.invert(mask)], est_flat[np.invert(mask)])**2.0
 
-        return R2_heldin, R2_heldout
+        return R2_heldin[0,1], R2_heldout[0,1]
 
 
     # this calls self.eval_model_runs_avg_epoch to get the posterior means
