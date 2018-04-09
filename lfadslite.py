@@ -1,10 +1,10 @@
 import tensorflow as tf
 import numpy as np
-import sys
+#import sys
 import time
 import os
-import random
-import matplotlib.pyplot as plt
+#import random
+#import matplotlib.pyplot as plt
 
 
 # utils defined by CP
@@ -15,8 +15,8 @@ from helper_funcs import BidirectionalDynamicRNN, DynamicRNN, LinearTimeVarying
 from helper_funcs import KLCost_GaussianGaussian, Poisson
 from helper_funcs import write_data
 from helper_funcs import printer
-from plot_funcs import plot_data, close_all_plots
-from data_funcs import read_datasets
+#from plot_funcs import plot_data, close_all_plots
+from data_funcs import load_datasets
 from customcells import ComplexCell
 from customcells import CustomGRUCell
 from helper_funcs import dropout
@@ -44,8 +44,7 @@ class LFADS(object):
             mask_h = tf.abs(1 - mask)
             return tf.stop_gradient(mask_h * target) + mask * target
 
-    # build the graph
-        print("This is lfadslite with L2")
+        # build the graph
         # set the learning rate, defaults to the hyperparam setting
         # TODO: test if this properly re-initializes learning rate when loading a new model
         self.learning_rate = tf.Variable(float(hps['learning_rate_init']), trainable=False, name="learning_rate")
@@ -66,7 +65,7 @@ class LFADS(object):
             # input data (what are we training on)
             # we're going to try setting input dimensionality to None
             #  so datasets with different sizes can be used
-            self.dataset_ph = tf.placeholder(tf.float32, shape = [None, hps['num_steps'], None], name='input_data')
+            #self.dataset_ph = tf.placeholder(tf.float32, shape = [None, hps['num_steps'], None], name='input_data')
             # dropout keep probability
             #   enumerated in helper_funcs.kind_dict
             self.keep_prob = tf.placeholder(tf.float32, name='keep_prob')
@@ -78,7 +77,39 @@ class LFADS(object):
             # name of the dataset
             self.dataName = tf.placeholder(tf.string, shape=(), name='dataset_name')
 
-         
+
+        ## dev zone
+        # constructing Datasets using tf.data
+        datasets = load_datasets(hps.data_dir, hps.data_filename_stem)
+
+        dataset_tr = {}
+        dataset_val = {}
+        for name, data_dict in datasets.items():
+            nexamples, ntime, data_dim = data_dict['valid_data'].shape
+            dataset_tr[name] = tf.data.Dataset.from_tensor_slices(data_dict['train_data'].astype(np.float32))
+            dataset_val[name] = tf.data.Dataset.from_tensor_slices(data_dict['valid_data'].astype(np.float32))
+            # doing training pre-processing
+            dataset_tr[name] = dataset_tr[name].shuffle(10000)
+            #dataset_tr[name] = dataset_tr[name].repeat()
+            dataset_tr[name] = dataset_tr[name].batch(hps['batch_size'])
+
+            # validation stuff
+            #dataset_val[name] = dataset_val[name].repeat()
+            dataset_val[name] = dataset_val[name].batch(nexamples)
+
+        # this needs to be changed to support multiple datasets
+        iterator = tf.data.Iterator.from_structure(dataset_tr[name].output_types,
+                                                   [None, ntime, data_dim])
+
+        # need to change for multiple datasets
+        self.training_init_op = iterator.make_initializer(dataset_tr[name])
+        self.validation_init_op = iterator.make_initializer(dataset_val[name])
+
+        next_element = iterator.get_next()
+        self.dataset_ph = next_element
+        # dev zone
+
+
         # make placeholders for all the input and output adapter matrices
         ndatasets = hps.ndatasets
         # preds will be used to select elements of each session
@@ -210,10 +241,10 @@ class LFADS(object):
         graph_batch_size = tf.shape(self.dataset_ph)[0]
 
         # can we infer the data dimensionality for the random mask?
-        data_dim_tensor = tf.shape(self.dataset_ph)[2]
-        dataset_dims = self.dataset_ph.get_shape()
-        data_dim = dataset_dims[2]
-        print(data_dim)
+        #data_dim_tensor = tf.shape(self.dataset_ph)[2]
+        #dataset_dims = self.dataset_ph.get_shape()
+        #data_dim = dataset_dims[2]
+        #print(data_dim)
         
         # coordinated dropout
         if hps['keep_ratio'] != 1.0:
@@ -633,7 +664,7 @@ class LFADS(object):
 
         
     ## functions to interface with the outside world
-    def build_feed_dict(self, train_name, data_bxtxd, run_type = None,
+    def build_feed_dict(self, train_name, run_type = None,
                         keep_prob=None, kl_ic_weight=1.0, kl_co_weight=1.0,
                         keep_ratio=None, cv_keep_ratio=None):
       """Build the feed dictionary, handles cases where there is no value defined.
@@ -659,9 +690,9 @@ class LFADS(object):
       #   self.keep_prob
 
       feed_dict = {}
-      B, T, _ = data_bxtxd.shape
+      #B, T, _ = data_bxtxd.shape
       feed_dict[self.dataName] = train_name
-      feed_dict[self.dataset_ph] = data_bxtxd
+      #feed_dict[self.dataset_ph] = data_bxtxd
       feed_dict[self.kl_ic_weight] = kl_ic_weight
       feed_dict[self.kl_co_weight] = kl_co_weight
 
@@ -681,46 +712,6 @@ class LFADS(object):
         feed_dict[self.keep_ratio] = keep_ratio
 
       return feed_dict
-
-
-
-    def shuffle_and_flatten_datasets(self, datasets, kind='train'):
-      """Since LFADS supports multiple datasets in the same dynamical model,
-      we have to be careful to use all the data in a single training epoch.  But
-      since the datasets my have different data dimensionality, we cannot batch
-      examples from data dictionaries together.  Instead, we generate random
-      batches within each data dictionary, and then randomize these batches
-      while holding onto the dataname, so that when it's time to feed
-      the graph, the correct in/out matrices can be selected, per batch.
-
-      Args:
-        datasets: A dict of data dicts.  The dataset dict is simply a
-          name(string)-> data dictionary mapping (See top of lfads.py).
-        kind: 'train' or 'valid'
-
-      Returns:
-        A flat list, in which each element is a pair ('name', indices).
-      """
-      batch_size = self.hps.batch_size
-      ndatasets = len(datasets)
-      random_example_idxs = {}
-      epoch_idxs = {}
-      all_name_example_idx_pairs = []
-      kind_data = kind + '_data'
-      for name, data_dict in datasets.items():
-        nexamples, ntime, data_dim = data_dict[kind_data].shape
-        epoch_idxs[name] = 0
-        random_example_idxs = \
-          ListOfRandomBatches(nexamples, batch_size)
-
-        epoch_size = len(random_example_idxs)
-        names = [name] * epoch_size
-        all_name_example_idx_pairs += zip(names, random_example_idxs)
-
-      # shuffle the batches so the dataset order is scrambled
-      np.random.shuffle(all_name_example_idx_pairs) #( shuffle in place)
-
-      return all_name_example_idx_pairs
 
 
     def train_epoch(self, datasets, do_save_ckpt, kl_ic_weight, kl_co_weight):
@@ -749,36 +740,35 @@ class LFADS(object):
     def run_epoch(self, datasets, kl_ic_weight, kl_co_weight, train_or_valid = "train"):
         ops_to_eval = [self.total_cost, self.rec_cost_train, self.rec_cost_valid,
                        self.kl_cost]
-        # get a full list of all data for this type (train/valid)
-        all_name_example_idx_pairs = \
-          self.shuffle_and_flatten_datasets(datasets, train_or_valid)
-        
+
+        session = tf.get_default_session()
+
         if train_or_valid == "train":
             ops_to_eval.append(self.train_op)
             kind_data = "train_data"
             keep_prob = self.hps.keep_prob
             keep_ratio = self.hps.keep_ratio
-
+            session.run(self.training_init_op)
         else:
             kind_data = "valid_data"
             keep_prob = 1.0
             keep_ratio = 1.0
+            session.run(self.validation_init_op)
             
-        session = tf.get_default_session()
 
         evald_ops = []
         # iterate over all datasets
-        for name, example_idxs in all_name_example_idx_pairs:
-            data_dict = datasets[name]
-            data_extxd = data_dict[kind_data]
-
-            this_batch = data_extxd[example_idxs,:,:]
-            feed_dict = self.build_feed_dict(name, this_batch, keep_prob=keep_prob,
-                                             run_type = kind_dict("train"),
-                                             kl_ic_weight = kl_ic_weight,
-                                             kl_co_weight = kl_co_weight,
+        for name, _ in datasets.items():
+            feed_dict = self.build_feed_dict(name, keep_prob=keep_prob,
+                                             run_type=kind_dict("train"),
+                                             kl_ic_weight=kl_ic_weight,
+                                             kl_co_weight=kl_co_weight,
                                              keep_ratio=keep_ratio)
-            evald_ops_this_batch = session.run(ops_to_eval, feed_dict = feed_dict)
+            while True:
+                try:
+                    evald_ops_this_batch = session.run(ops_to_eval, feed_dict = feed_dict)
+                except tf.errors.OutOfRangeError:
+                    break
             # for training runs, there is an extra output argument. kill it
             if len(evald_ops_this_batch) > 4:
                 tc, rc, rc_v, kl, _= evald_ops_this_batch
@@ -786,27 +776,6 @@ class LFADS(object):
             evald_ops.append(evald_ops_this_batch)
         evald_ops = np.mean(evald_ops, axis=0)
         return evald_ops
-        
-    # MRK the following functions are not used at all
-    # def train_batch(self, dict_from_py):
-    #     session = tf.get_default_session()
-    #     ops_to_eval = [self.train_op, self.total_cost, self.rec_cost_train, \
-    #                          self.kl_cost, self.output_dist_params, self.learning_rate]
-    #     feed_dict = {self.dataset_ph: dict_from_py['dataset_ph'],
-    #                  self.keep_prob: dict_from_py['keep_prob'],
-    #                  self.keep_ratio: dict_from_py['keep_ratio'],
-    #                  self.run_type: kind_dict("train")}
-    #     return session.run(ops_to_eval, feed_dict)
-    #
-    #
-    # def validation_batch(self, dict_from_py):
-    #     session = tf.get_default_session()
-    #     ops_to_eval = [self.total_cost, self.rec_cost_train, self.kl_cost]
-    #     feed_dict = {self.input_data: dict_from_py['input_data'],
-    #                  self.keep_prob: 1.0, # don't need to lower keep_prob from validation
-    #                  self.keep_ratio: 1.0,
-    #                  self.run_type: kind_dict("train")}
-    #     return session.run(ops_to_eval, feed_dict)
 
 
     def run_learning_rate_decay_opt(self):
@@ -847,7 +816,6 @@ class LFADS(object):
         
         data_dict = datasets[name]
         data_extxd = data_dict["train_data"]
-        this_batch = data_extxd[0:hps['batch_size'],:,:]
 
         train_costs = []
 
