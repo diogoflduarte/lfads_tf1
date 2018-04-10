@@ -82,6 +82,28 @@ class LFADS(object):
         # constructing Datasets using tf.data
         datasets = load_datasets(hps.data_dir, hps.data_filename_stem)
 
+        #q = tf.FIFOQueue(capacity=3, dtypes=tf.float32)
+
+        for name, data_dict in datasets.items():
+            nexamples, ntime, data_dim = data_dict['valid_data'].shape
+            data = data_dict['train_data'].astype(np.float32)#.tolist()
+            print(data.shape)
+            data_tens = tf.convert_to_tensor(data, dtype=tf.float32)
+            # trial_batch = tf.train.shuffle_batch([data_tens], enqueue_many=True, batch_size=hps['batch_size'], capacity=3000, min_after_dequeue=50, allow_smaller_final_batch=True)
+
+            random_trial = tf.train.slice_input_producer([data_tens], shuffle=True, capacity=3000)
+            #print(random_trial.get_shape())
+
+        trial_batch = tf.train.batch([random_trial], batch_size=hps['batch_size'], enqueue_many=True, capacity=3000, )
+
+        self.dataset_ph = trial_batch #trial_batch
+
+
+        #enqueue_op = q.enqueue_many(trial_batch)
+        #qr = tf.train.QueueRunner(q, [enqueue_op] * 1)
+        #tf.train.add_queue_runner(qr)
+
+        """ tf.data
         dataset_tr = {}
         dataset_val = {}
         for name, data_dict in datasets.items():
@@ -89,15 +111,28 @@ class LFADS(object):
             dataset_tr[name] = tf.data.Dataset.from_tensor_slices(data_dict['train_data'].astype(np.float32))
             dataset_val[name] = tf.data.Dataset.from_tensor_slices(data_dict['valid_data'].astype(np.float32))
             # doing training pre-processing
-            dataset_tr[name] = dataset_tr[name].shuffle(10000)
+            dataset_tr[name] = dataset_tr[name].cache()
+            # following line didn't speed up
+            #dataset_tr[name] = dataset_tr[name].apply(tf.contrib.data.shuffle_and_repeat(10000, 100))
+
             #dataset_tr[name] = dataset_tr[name].repeat()
+            dataset_tr[name] = dataset_tr[name].shuffle(hps['batch_size'] * 4)
             dataset_tr[name] = dataset_tr[name].batch(hps['batch_size'])
 
+            # following line didn't speed up
+            #dataset_tr[name] = dataset_tr[name].apply(tf.contrib.data.prefetch_to_device("/gpu:0"))
+            #dataset_tr[name] = dataset_tr[name].prefetch(buffer_size=10)
+
             # validation stuff
+            dataset_val[name] = dataset_val[name].cache()
             #dataset_val[name] = dataset_val[name].repeat()
             dataset_val[name] = dataset_val[name].batch(nexamples)
+            #dataset_val[name] = dataset_val[name].prefetch(buffer_size=10)
+
 
         # this needs to be changed to support multiple datasets
+        #iterator = dataset_tr[name].make_one_shot_iterator()
+
         iterator = tf.data.Iterator.from_structure(dataset_tr[name].output_types,
                                                    [None, ntime, data_dim])
 
@@ -106,7 +141,11 @@ class LFADS(object):
         self.validation_init_op = iterator.make_initializer(dataset_val[name])
 
         next_element = iterator.get_next()
+
         self.dataset_ph = next_element
+        """
+
+
         # dev zone
 
 
@@ -239,6 +278,7 @@ class LFADS(object):
         
         # batch_size - read from the data placeholder
         graph_batch_size = tf.shape(self.dataset_ph)[0]
+        #graph_batch_size = hps['batch_size']
         #graph_batch_size = self.dataset_ph.get_shape().as_list()[0]
 
         # can we infer the data dimensionality for the random mask?
@@ -749,33 +789,39 @@ class LFADS(object):
             kind_data = "train_data"
             keep_prob = self.hps.keep_prob
             keep_ratio = self.hps.keep_ratio
-            session.run(self.training_init_op)
+            #session.run(self.training_init_op)
         else:
             kind_data = "valid_data"
             keep_prob = 1.0
             keep_ratio = 1.0
-            session.run(self.validation_init_op)
+            #session.run(self.validation_init_op)
+            reps = 1
             
 
         evald_ops = []
         # iterate over all datasets
-        for name, _ in datasets.items():
+        for name, d in datasets.items():
             feed_dict = self.build_feed_dict(name, keep_prob=keep_prob,
                                              run_type=kind_dict("train"),
                                              kl_ic_weight=kl_ic_weight,
                                              kl_co_weight=kl_co_weight,
                                              keep_ratio=keep_ratio)
-            while True:
-                try:
-                    evald_ops_this_batch = session.run(ops_to_eval, feed_dict = feed_dict)
-                except tf.errors.OutOfRangeError:
-                    break
+            # used with tf.data.repeat mode
+            if train_or_valid == "train":
+                reps = d['train_data'].shape[0] // self.hps['batch_size'] + 1
+            #while True:
+            for _ in range(reps):
+                #try:
+                evald_ops_this_batch = session.run(ops_to_eval, feed_dict = feed_dict)
+                #except tf.errors.OutOfRangeError:
+                #    break
             # for training runs, there is an extra output argument. kill it
             if len(evald_ops_this_batch) > 4:
                 tc, rc, rc_v, kl, _= evald_ops_this_batch
                 evald_ops_this_batch = (tc, rc, rc_v, kl)
             evald_ops.append(evald_ops_this_batch)
         evald_ops = np.mean(evald_ops, axis=0)
+
         return evald_ops
 
 
@@ -802,6 +848,9 @@ class LFADS(object):
             break
 
         session = tf.get_default_session()
+
+        coord = tf.train.Coordinator()
+        threads = tf.train.start_queue_runners(coord=coord)
 
         # monitor the learning rate
         lr = self.get_learning_rate()
@@ -1011,7 +1060,9 @@ class LFADS(object):
             train_costs.append(train_cost_to_use)
 
             nepoch += 1
-
+        coord.request_stop()
+        coord.join(threads)
+        session.close()
 
     def eval_model_runs_batch(self, data_name, data_bxtxd,
                               do_eval_cost=False, do_average_batch=False):
