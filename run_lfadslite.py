@@ -61,6 +61,8 @@ MAX_GRAD_NORM = 200.0
 CELL_CLIP_VALUE = 5.0
 KEEP_PROB = 0.95
 KEEP_RATIO = 1.0
+CD_GRAD_PASSTHRU_PROB = 0.0
+
 CV_KEEP_RATIO = 1.0
 CV_RAND_SEED = 0.0
 
@@ -292,6 +294,7 @@ flags.DEFINE_float("keep_prob", KEEP_PROB, "Dropout keep probability.")
 
 # COORDINATED DROPOUT
 flags.DEFINE_float("keep_ratio", KEEP_RATIO, "Coordinated Dropout input keep probability.")
+flags.DEFINE_float("cd_grad_passthru_prob", CD_GRAD_PASSTHRU_PROB, "Probability of passing through gradients in coordinated dropout.")
 
 # CROSS-VALIDATION
 flags.DEFINE_float("cv_keep_ratio", CV_KEEP_RATIO, "Cross-validation keep probability.")
@@ -478,8 +481,10 @@ def build_hyperparameter_dict(flags):
   # Overfitting
   d['keep_prob'] = flags.keep_prob
   d['keep_ratio'] = flags.keep_ratio
+  d['cd_grad_passthru_prob'] = flags.cd_grad_passthru_prob
   d['cv_keep_ratio'] = flags.cv_keep_ratio
   d['cv_rand_seed'] = flags.cv_rand_seed
+
   d['l2_gen_scale'] = flags.l2_gen_scale
   d['l2_con_scale'] = flags.l2_con_scale
   d['l2_ic_enc_scale'] = flags.l2_ic_enc_scale

@@ -41,11 +41,10 @@ class LFADS(object):
 
         # to stop certain gradients paths through the graph in backprop
         def entry_stop_gradients(target, mask):
-            mask_h = tf.abs(1 - mask)
+            mask_h = 1. - mask
             return tf.stop_gradient(mask_h * target) + mask * target
 
     # build the graph
-        print("This is lfadslite with L2")
         # set the learning rate, defaults to the hyperparam setting
         # TODO: test if this properly re-initializes learning rate when loading a new model
         self.learning_rate = tf.Variable(float(hps['learning_rate_init']), trainable=False, name="learning_rate")
@@ -99,6 +98,7 @@ class LFADS(object):
         #self.input_dim = hps['dataset_dims'][allsets[0]]
         
         self.cv_keep_ratio = hps['cv_keep_ratio']
+        self.cd_grad_passthru_prob = hps['cd_grad_passthru_prob']
 
         ## do per-session stuff
         for d, name in enumerate( dataset_names ):
@@ -213,8 +213,7 @@ class LFADS(object):
         data_dim_tensor = tf.shape(self.dataset_ph)[2]
         dataset_dims = self.dataset_ph.get_shape()
         data_dim = dataset_dims[2]
-        print(data_dim)
-        
+
         # coordinated dropout
         if hps['keep_ratio'] != 1.0:
             # coordinated dropout enabled on inputs
@@ -490,11 +489,17 @@ class LFADS(object):
             self.kl_cost += self.kl_cost_co * self.kl_co_weight
 
 
-        # todo test gradient blocking for gaussian dist
         ## calculate reconstruction cost
         # get final mask for gradient blocking
         if hps['keep_ratio'] != 1.0:
-            grad_binary_mask = self.cv_binary_mask_batch * (1. - coor_drop_binary_mask)
+            # let the gradients pass through on blocked nodes with some probability
+            random_tensor = tf.convert_to_tensor(1. - self.cd_grad_passthru_prob)
+            random_tensor += tf.random_uniform(tf.shape(coor_drop_binary_mask),
+                                                       dtype=coor_drop_binary_mask.dtype)
+            # pass thru some gradients
+            tmp_binary_mask =  coor_drop_binary_mask * tf.floor(random_tensor)
+            # exclude cv samples
+            grad_binary_mask = self.cv_binary_mask_batch * (1. - tmp_binary_mask)
         else:
             grad_binary_mask = self.cv_binary_mask_batch
 
@@ -552,13 +557,11 @@ class LFADS(object):
                             'l2_ci_enc_2_co_in',
                             ]
 
-        print(l2_reg_var_lists)
         l2_reg_scales = [hps.l2_gen_scale, hps.l2_con_scale,
                          hps.l2_ic_enc_scale, hps.l2_ci_enc_scale,
                          hps.l2_gen_2_factors_scale,
                          hps.l2_ci_enc_2_co_in]
         for l2_reg, l2_scale in zip(l2_reg_var_lists, l2_reg_scales):
-            print(l2_scale)
             if l2_scale == 0:
                 continue
             l2_reg_vars = tf.get_collection(l2_reg)
@@ -568,9 +571,7 @@ class LFADS(object):
                 l2_numels.append(numel_f)
                 v_l2 = tf.reduce_sum(v*v)
                 l2_costs.append(0.5 * l2_scale * v_l2)
-        print(l2_numels)
         if l2_numels:
-            print("L2 cost applied")
             self.l2_cost = tf.add_n(l2_costs) / tf.add_n(l2_numels)
 
         ## calculate total training cost
@@ -849,7 +850,7 @@ class LFADS(object):
         data_extxd = data_dict["train_data"]
         this_batch = data_extxd[0:hps['batch_size'],:,:]
 
-        train_costs = []
+        valid_costs = []
 
         # print validation costs before the first training step
         val_total_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, val_kl_cost = \
@@ -1034,12 +1035,14 @@ class LFADS(object):
             # should we decrement learning rate?
             # MRK, for PBT we can set n_lr to np.inf
             n_lr = hps['learning_rate_n_to_compare']
-            train_cost_to_use = tr_total_cost
-            if len(train_costs) > n_lr and train_cost_to_use > np.max(train_costs[-n_lr:]):
+
+            # MRK, change the LR decay based on valid cost (previously was based on train cost)
+            valid_cost_to_use = val_total_cost
+            if len(valid_costs) > n_lr and valid_cost_to_use > np.max(valid_costs[-n_lr:]):
                 print("Decreasing learning rate")
                 self.run_learning_rate_decay_opt()
 
-            train_costs.append(train_cost_to_use)
+            valid_costs.append(valid_cost_to_use)
 
             nepoch += 1
 
