@@ -3,6 +3,7 @@ import numpy as np
 import sys
 import time
 import os
+import re
 import random
 import matplotlib.pyplot as plt
 
@@ -46,7 +47,6 @@ class LFADS(object):
 
     # build the graph
         # set the learning rate, defaults to the hyperparam setting
-        # TODO: test if this properly re-initializes learning rate when loading a new model
         self.learning_rate = tf.Variable(float(hps['learning_rate_init']), trainable=False, name="learning_rate")
 
         # this is how the learning rate is decayed over time
@@ -582,9 +582,12 @@ class LFADS(object):
         trainable_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
         if hps.do_train_readin==False:
             # filter out any variables with name containing '_in_fac_linear'
-            import re
             regex = re.compile('.+_in_fac_linear.+')
             trainable_vars = [i for i in trainable_vars if not regex.search(i.name)]
+
+        if hps.do_train_encoder_only:
+            trainable_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='LFADS/ic_enc*')  + \
+                             tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='LFADS/ci_enc*')
 
         self.trainable_vars = trainable_vars
         
@@ -617,6 +620,8 @@ class LFADS(object):
         self.hps = hps
 
 
+        # Don't print this?
+        '''
         print("Model Variables (to be optimized): ")
         total_params = 0
         tvars = self.trainable_vars
@@ -625,7 +630,7 @@ class LFADS(object):
             print("- ", i, tvars[i].name, shape)
             total_params += np.prod(shape)
         print("Total model parameters: ", total_params)
-
+        '''
         
         self.merged_generic = tf.summary.merge_all() # default key is 'summaries'
         session = tf.get_default_session()
@@ -873,6 +878,7 @@ class LFADS(object):
 
         while True:
             new_lr = self.get_learning_rate()
+            #print('Starting learning rate: ', new_lr)
             # should we stop?
             if target_num_epochs is None:
                 if new_lr < hps['learning_rate_stop']:

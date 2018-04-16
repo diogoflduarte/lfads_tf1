@@ -44,6 +44,7 @@ DO_RESET_LEARNING_RATE = False
 
 # flag to only allow training of the encoder (i.e., lock the generator, factors readout, rates readout, controller, etc weights)
 DO_TRAIN_ENCODER_ONLY = False
+
 # flag to allow training the readin (alignment) matrices (only used in cases where alignment matrices are used
 DO_TRAIN_READIN = True
 
