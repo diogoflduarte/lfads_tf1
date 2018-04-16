@@ -578,16 +578,17 @@ class LFADS(object):
         self.total_cost = self.l2_cost + self.kl_cost + self.rec_cost_train
         
 
-        # get the list of trainable variables
-        trainable_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-        if hps.do_train_readin==False:
-            # filter out any variables with name containing '_in_fac_linear'
-            regex = re.compile('.+_in_fac_linear.+')
-            trainable_vars = [i for i in trainable_vars if not regex.search(i.name)]
-
         if hps.do_train_encoder_only:
+            # get the list of ci_enc and ic_enc variables
             trainable_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='LFADS/ic_enc*')  + \
                              tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='LFADS/ci_enc*')
+        else:
+            # get the list of trainable variables
+            trainable_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+            if hps.do_train_readin == False:
+                # filter out any variables with name containing '_in_fac_linear'
+                regex = re.compile('.+_in_fac_linear.+')
+                trainable_vars = [i for i in trainable_vars if not regex.search(i.name)]
 
         self.trainable_vars = trainable_vars
         
