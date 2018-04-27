@@ -9,7 +9,7 @@ import os
 import h5py
 import json
 import sys
-
+import warnings
 
 def kind_dict_definition():
 # used in the graph's keep probability
@@ -222,7 +222,10 @@ def linear(x, out_size, name, collections=None, mat_init_value=None, bias_init_v
 
 
 def ListOfRandomBatches(num_trials, batch_size):
-    assert num_trials >= batch_size, "Your batch size is bigger than num_trials..."
+    if num_trials >= batch_size:
+        warnings.warn("Your batch size is bigger than num_trials! Using single batch ...")
+        return [np.random.permutation(range(num_trials))]
+
     random_order = np.random.permutation(range(num_trials))
     even_num_of_batches = int( np.floor ( num_trials / batch_size ) )
     trials_to_keep = even_num_of_batches * batch_size

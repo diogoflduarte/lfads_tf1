@@ -5,7 +5,7 @@ import time
 import os
 import re
 import random
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 
 
 # utils defined by CP
@@ -16,8 +16,8 @@ from helper_funcs import BidirectionalDynamicRNN, DynamicRNN, LinearTimeVarying
 from helper_funcs import KLCost_GaussianGaussian, Poisson
 from helper_funcs import write_data
 from helper_funcs import printer
-from plot_funcs import plot_data, close_all_plots
-from data_funcs import read_datasets
+#from plot_funcs import plot_data, close_all_plots
+#from data_funcs import read_datasets
 from customcells import ComplexCell
 from customcells import CustomGRUCell
 from helper_funcs import dropout
@@ -717,8 +717,12 @@ class LFADS(object):
       for name, data_dict in datasets.items():
         nexamples, ntime, data_dim = data_dict[kind_data].shape
         epoch_idxs[name] = 0
-        random_example_idxs = \
-          ListOfRandomBatches(nexamples, batch_size)
+        if kind == 'valid':
+            # pass one large batch for validation set
+            random_example_idxs = [np.arange(nexamples)]
+        else:
+            random_example_idxs = \
+                ListOfRandomBatches(nexamples, batch_size)
 
         epoch_size = len(random_example_idxs)
         names = [name] * epoch_size
@@ -846,6 +850,7 @@ class LFADS(object):
 
         # epoch counter
         nepoch = 0
+        lve_epoch = 0
 
         num_save_checkpoint = 1     # save checkpoints every num_save_checkpoint steps
 
@@ -871,7 +876,11 @@ class LFADS(object):
                0, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, 0, val_kl_cost,
                kl_weight))
         # pre-load the lve checkpoint (used in case of loaded checkpoint)
-        self.lve = valid_set_heldin_samp_cost
+
+        if hps['checkpoint_pb_load_name'] == 'checkpoint_lve':
+            self.lve = valid_set_heldin_samp_cost
+        else:
+            self.lve = np.inf
         self.trial_recon_cost = valid_set_heldin_samp_cost
         self.samp_recon_cost = valid_set_heldout_samp_cost
 
@@ -1001,7 +1010,7 @@ class LFADS(object):
                 self.lve = smth_trial_val_recn_cost
                 # MRK, make lve accessible from the model class
                 #self.lve = lve
-
+                lve_epoch = nepoch
                 checkpoint_path = os.path.join(self.hps.lfads_save_dir,
                                                self.hps.checkpoint_name + '_lve.ckpt')
                 # MRK, for convenience, it can be reconstructed from the paths in hps
@@ -1048,6 +1057,12 @@ class LFADS(object):
             if len(valid_costs) > n_lr and valid_cost_to_use > np.max(valid_costs[-n_lr:]):
                 print("Decreasing learning rate")
                 self.run_learning_rate_decay_opt()
+
+            # early stopping when no improvement of validation cost for 3*n_lr
+            #if len(valid_costs) > n_lr*3 and valid_cost_to_use > np.max(valid_costs[-n_lr*3:]):
+            if nepoch - lve_epoch > 3*n_lr:
+                print("No improvement of the validation cost! Stopping the training!")
+                break
 
             valid_costs.append(valid_cost_to_use)
 
