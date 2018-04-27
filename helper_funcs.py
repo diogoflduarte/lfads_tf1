@@ -222,7 +222,7 @@ def linear(x, out_size, name, collections=None, mat_init_value=None, bias_init_v
 
 
 def ListOfRandomBatches(num_trials, batch_size):
-    if num_trials >= batch_size:
+    if num_trials <= batch_size:
         warnings.warn("Your batch size is bigger than num_trials! Using single batch ...")
         return [np.random.permutation(range(num_trials))]
 

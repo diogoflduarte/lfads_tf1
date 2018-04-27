@@ -858,8 +858,8 @@ class LFADS(object):
         name=datasets.keys()[0]
         
         data_dict = datasets[name]
-        data_extxd = data_dict["train_data"]
-        this_batch = data_extxd[0:hps['batch_size'],:,:]
+        #data_extxd = data_dict["train_data"]
+        #his_batch = data_extxd[0:hps['batch_size'],:,:]
 
         valid_costs = []
 
