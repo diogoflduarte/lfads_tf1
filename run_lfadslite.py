@@ -77,6 +77,8 @@ DO_CAUSAL_CONTROLLER = False
 CONTROLLER_INPUT_LAG = 1
 CI_ENC_DIM = 128
 CON_DIM = 128
+EXT_INPUT_DIM = 0
+
 # scale of regularizer on time correlation of inferred inputs
 KL_IC_WEIGHT = 1.0
 KL_CO_WEIGHT = 1.0
@@ -200,6 +202,11 @@ flags.DEFINE_float("co_post_var_min", CO_POST_VAR_MIN,
 # then no controller.
 flags.DEFINE_integer("co_dim", CO_DIM,
     "Number of control net outputs (>0 builds that graph).")
+
+flags.DEFINE_integer("ext_input_dim", EXT_INPUT_DIM,
+    "Dimension of external inputs if any.")
+
+
 
 # The controller will be more powerful if it can see the encoding of the entire
 # trial.  However, this allows the controller to create inferred inputs that are
@@ -463,6 +470,7 @@ def build_hyperparameter_dict(flags):
   d['controller_input_lag'] = flags.controller_input_lag
 #  d['do_feed_factors_to_controller'] = flags.do_feed_factors_to_controller
   d['co_dim'] = flags.co_dim
+  d['ext_input_dim'] = flags.ext_input_dim
   d['ci_enc_dim'] = flags.ci_enc_dim
   d['con_dim'] = flags.con_dim
   # Optimization

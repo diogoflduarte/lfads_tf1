@@ -76,8 +76,19 @@ class LFADS(object):
             self.kl_co_weight = tf.placeholder(tf.float32, name='kl_co_weight')
             # name of the dataset
             self.dataName = tf.placeholder(tf.string, shape=(), name='dataset_name')
+            if hps['ext_input_dim'] > 0:
+                self.ext_input = tf.placeholder(tf.float32,
+                                      [None, hps['num_steps'], hps['ext_input_dim']],
+                                      name="ext_input")
+            else:
+                self.ext_input = None
 
-         
+        if hps['ext_input_dim'] > 0:
+            self.ext_input = tf.nn.dropout(self.ext_input, hps.keep_prob)
+        else:
+            self.ext_input = None
+
+
         # make placeholders for all the input and output adapter matrices
         ndatasets = hps.ndatasets
         # preds will be used to select elements of each session
@@ -90,8 +101,7 @@ class LFADS(object):
         # specific to lfadslite - need to make placeholders for the cross validation dropout masks
         self.random_masks_np = random_masks_np = [None] * ndatasets
         self.fns_cv_binary_masks = fns_cv_binary_masks = [None] * ndatasets
-        # ext_inputs are not yet implemented, but, placeholder for later
-        self.ext_inputs = ext_inputs = None
+
         
         # figure out the input (dataset) dimensionality
         #allsets = hps['dataset_dims'].keys()
@@ -284,19 +294,22 @@ class LFADS(object):
         ### CONTROLLER construction
         # this should only be done if a controller is requested
         # if not, skip all these graph elements like so:
-        if hps['co_dim'] ==0:
+        if hps['co_dim'] == 0:
             with tf.variable_scope('generator'):
                 gen_cell = CustomGRUCell(num_units = hps['ic_enc_dim'],
                                          batch_size = graph_batch_size,
                                          clip_value = hps['cell_clip_value'],
                                          recurrent_collections=['l2_gen'])
                 # setup generator
+                # will be None with no inputs
+                gen_input = self.ext_input
+
                 self.gen_rnn_obj = DynamicRNN(state_dim = hps['gen_dim'],
                                               batch_size = graph_batch_size,
                                               name = 'gen',
                                               sequence_lengths = seq_len,
                                               cell = gen_cell,
-                                              inputs = None,
+                                              inputs = gen_input,
                                               initial_state = self.gen_ics,
                                               rnn_type = 'customgru',
                                               output_keep_prob = self.keep_prob)
@@ -405,15 +418,21 @@ class LFADS(object):
                                              hps['co_dim'],
                                              hps['factors_dim'],
                                              hps['con_fac_in_dim'],
+                                             hps['ext_input_dim'],
                                              graph_batch_size,
                                              var_min = hps['co_post_var_min'],
                                              kind = self.run_type)
 
                 # construct the actual RNN
                 #   its inputs are the output of the controller_input_enc
+
+                if hps['ext_input_dim']:
+                    complex_cell_inputs = tf.concat(axis=2, values = [self.ci_enc_outputs, self.ext_input])
+                else:
+                    complex_cell_inputs = self.ci_enc_outputs
                 self.complex_outputs, self.complex_final_state =\
                 tf.nn.dynamic_rnn(self.complexcell,
-                                  inputs = self.ci_enc_outputs,
+                                  inputs = complex_cell_inputs,
                                   initial_state = self.complexcell_init_state,
                                   time_major=False)
 
@@ -640,9 +659,9 @@ class LFADS(object):
 
         
     ## functions to interface with the outside world
-    def build_feed_dict(self, train_name, data_bxtxd, run_type = None,
+    def build_feed_dict(self, train_name, data_bxtxd, ext_input_bxtxi=None, run_type=None,
                         keep_prob=None, kl_ic_weight=1.0, kl_co_weight=1.0,
-                        keep_ratio=None, cv_keep_ratio=None):
+                        keep_ratio=None):
       """Build the feed dictionary, handles cases where there is no value defined.
 
       Args:
@@ -671,6 +690,9 @@ class LFADS(object):
       feed_dict[self.dataset_ph] = data_bxtxd
       feed_dict[self.kl_ic_weight] = kl_ic_weight
       feed_dict[self.kl_co_weight] = kl_co_weight
+
+      if self.ext_input is not None and ext_input_bxtxi is not None:
+          feed_dict[self.ext_input] = ext_input_bxtxi
 
       if run_type is None:
         feed_dict[self.run_type] = self.hps.kind
@@ -767,11 +789,13 @@ class LFADS(object):
         if train_or_valid == "train":
             ops_to_eval.append(self.train_op)
             kind_data = "train_data"
+            ext_input_kind = "train_ext_input"
             keep_prob = self.hps.keep_prob
             keep_ratio = self.hps.keep_ratio
 
         else:
             kind_data = "valid_data"
+            ext_input_kind = "valid_ext_input"
             keep_prob = 1.0
             keep_ratio = 1.0
             
@@ -782,9 +806,12 @@ class LFADS(object):
         for name, example_idxs in all_name_example_idx_pairs:
             data_dict = datasets[name]
             data_extxd = data_dict[kind_data]
+            ext_input_bxtxi = data_dict[ext_input_kind]
 
             this_batch = data_extxd[example_idxs,:,:]
-            feed_dict = self.build_feed_dict(name, this_batch, keep_prob=keep_prob,
+            ext_input_batch = ext_input_bxtxi[example_idxs,:,:]
+
+            feed_dict = self.build_feed_dict(name, this_batch, ext_input_batch, keep_prob=keep_prob,
                                              run_type = kind_dict("train"),
                                              kl_ic_weight = kl_ic_weight,
                                              kl_co_weight = kl_co_weight,
@@ -1069,7 +1096,7 @@ class LFADS(object):
             nepoch += 1
 
 
-    def eval_model_runs_batch(self, data_name, data_bxtxd,
+    def eval_model_runs_batch(self, data_name, data_bxtxd, ext_input_bxtxi,
                               do_eval_cost=False, do_average_batch=False):
         """Returns all the goodies for the entire model, per batch.
 
@@ -1098,7 +1125,7 @@ class LFADS(object):
         else:
             run_type = kind_dict('posterior_sample_and_average')
 
-        feed_dict = self.build_feed_dict(data_name, data_bxtxd, run_type=run_type,
+        feed_dict = self.build_feed_dict(data_name, data_bxtxd, ext_input_bxtxi, run_type=run_type,
                                          keep_prob=1.0, keep_ratio=1.0)
         # Non-temporal signals will be batch x dim.
         # Temporal signals are list length T with elements batch x dim.
@@ -1116,7 +1143,7 @@ class LFADS(object):
     #        tf_vals_flat, fidxs = flatten(tf_vals)
             
     # this does the bulk of posterior sample & mean
-    def eval_model_runs_avg_epoch(self, data_name, data_extxd, pm_batch_size=None,
+    def eval_model_runs_avg_epoch(self, data_name, data_extxd, ext_input_bxtxi, pm_batch_size=None,
                                   do_average_batch=False):
         """Returns all the expected value for goodies for the entire model.
 
@@ -1177,7 +1204,7 @@ class LFADS(object):
             #print("Running %d of %d." % (es_idx+1, E_to_process))
             #example_idxs = es_idx * np.ones(batch_size, dtype=np.int32)
             # run the model
-            mv = self.eval_model_runs_batch(data_name, data_bxtxd,
+            mv = self.eval_model_runs_batch(data_name, data_bxtxd, ext_input_bxtxi,
                                             do_eval_cost=True,
                                             do_average_batch=do_average_batch)
             # assemble a dict from the returns
@@ -1290,16 +1317,16 @@ class LFADS(object):
         all_model_runs = []
 
         for data_name, data_dict in datasets.items():
-          data_tuple = [('train', data_dict['train_data']),
-                        ('valid', data_dict['valid_data'])]
-          for data_kind, data_extxd in data_tuple:
+          data_tuple = [('train', data_dict['train_data'], data_dict['train_ext_input']),
+                        ('valid', data_dict['valid_data'], data_dict['valid_ext_input'])]
+          for data_kind, data_extxd, ext_input_bxtxi in data_tuple:
             if not output_fname:
               fname = "model_runs_" + data_name + '_' + data_kind + '_' + kind
             else:
               fname = output_fname + data_name + '_' + data_kind + '_' + kind
 
             print("Writing data for %s data and kind %s to file %s." % (data_name, data_kind, fname))
-            model_runs = self.eval_model_runs_avg_epoch(data_name, data_extxd)
+            model_runs = self.eval_model_runs_avg_epoch(data_name, data_extxd, ext_input_bxtxi)
             all_model_runs.append(model_runs)
             full_fname = os.path.join(hps.lfads_save_dir, fname)
             write_data(full_fname, model_runs, compression='gzip')

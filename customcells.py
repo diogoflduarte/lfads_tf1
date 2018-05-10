@@ -93,11 +93,11 @@ class CustomGRUCell(tf.nn.rnn_cell.RNNCell):
 class ComplexCell(tf.nn.rnn_cell.RNNCell):
 
     def __init__(self, num_units_con, num_units_gen,
-                 co_dim, factors_dim, fac_2_con_dim,
+                 co_dim, factors_dim, fac_2_con_dim, ext_input_dim,
                  batch_size, var_min = 0.0,
                  clip_value = None,
                  state_is_tuple=False, reuse=None, kind=None,
-                 forget_bias=1.0):
+                 forget_bias=1.0, inject_ext_input_to_gen=True):
         super(ComplexCell, self).__init__(_reuse=reuse)
         
         self._num_units_con = num_units_con
@@ -124,6 +124,8 @@ class ComplexCell(tf.nn.rnn_cell.RNNCell):
         self.col_names = {'con': ['l2_con'],
                           'gen': ['l2_gen'],
                           'fac': ['l2_gen_2_factors'],}
+        self.inject_ext_input_to_gen = inject_ext_input_to_gen
+        self.ext_input_dim = ext_input_dim
 
     @property
     def state_size(self):
@@ -139,7 +141,11 @@ class ComplexCell(tf.nn.rnn_cell.RNNCell):
         # inputs and state better be a 4-tuple
         with tf.variable_scope(scope or type(self).__name__):
             # get the inputs
-            con_i = inputs
+            if self.ext_input_dim > 0:
+                ext_inputs = inputs[:,-self.ext_input_dim:]
+                con_i = inputs[:,:-self.ext_input_dim]
+            else:
+                con_i = inputs
             # split the state
             con_s, gen_s, co_mean_s, co_logvar_s, co_prev_out, fac_s = \
                             tf.split(state, [self._num_units_con,
@@ -219,8 +225,17 @@ class ComplexCell(tf.nn.rnn_cell.RNNCell):
                 else:
                     co_out = cos_posterior.mean
 
-            # generator's inputs are the controller's outputs
-            gen_inputs = co_out
+            # generator's inputs
+
+            if self.ext_input_dim > 0 and self.inject_ext_input_to_gen:
+                # passing external inputs along with controller output as generetor's input
+                gen_inputs = tf.concat(
+                    axis=1, values=[co_out, ext_inputs])
+            elif self.ext_input_dim > 0 and not self.inject_ext_input_to_gen:
+                assert 0, "Not Implemented!"
+            else:
+                # using only controller output as generator's input
+                gen_inputs = co_out
             
             ## implement standard GRU eqns for generator
             with tf.variable_scope("Generator_Gates"):
