@@ -83,7 +83,7 @@ class LFADS(object):
         datasets = load_datasets(hps.data_dir, hps.data_filename_stem)
 
         #q = tf.FIFOQueue(capacity=3, dtypes=tf.float32)
-
+        """ one way of feeding the data to the graph
         for name, data_dict in datasets.items():
             nexamples, ntime, data_dim = data_dict['valid_data'].shape
             data = data_dict['train_data'].astype(np.float32)#.tolist()
@@ -102,8 +102,10 @@ class LFADS(object):
         #enqueue_op = q.enqueue_many(trial_batch)
         #qr = tf.train.QueueRunner(q, [enqueue_op] * 1)
         #tf.train.add_queue_runner(qr)
+        """
 
-        """ tf.data
+        # """ tf.data
+
         dataset_tr = {}
         dataset_val = {}
         for name, data_dict in datasets.items():
@@ -143,7 +145,7 @@ class LFADS(object):
         next_element = iterator.get_next()
 
         self.dataset_ph = next_element
-        """
+        #"""
 
 
         # dev zone
@@ -789,12 +791,12 @@ class LFADS(object):
             kind_data = "train_data"
             keep_prob = self.hps.keep_prob
             keep_ratio = self.hps.keep_ratio
-            #session.run(self.training_init_op)
+            session.run(self.training_init_op)
         else:
             kind_data = "valid_data"
             keep_prob = 1.0
             keep_ratio = 1.0
-            #session.run(self.validation_init_op)
+            session.run(self.validation_init_op)
             reps = 1
             
 
@@ -807,14 +809,14 @@ class LFADS(object):
                                              kl_co_weight=kl_co_weight,
                                              keep_ratio=keep_ratio)
             # used with tf.data.repeat mode
-            if train_or_valid == "train":
-                reps = d['train_data'].shape[0] // self.hps['batch_size'] + 1
-            #while True:
-            for _ in range(reps):
-                #try:
-                evald_ops_this_batch = session.run(ops_to_eval, feed_dict = feed_dict)
-                #except tf.errors.OutOfRangeError:
-                #    break
+            #if train_or_valid == "train":
+            #    reps = d['train_data'].shape[0] // self.hps['batch_size'] + 1
+            while True:
+            #for _ in range(reps):
+                try:
+                    evald_ops_this_batch = session.run(ops_to_eval, feed_dict = feed_dict)
+                except tf.errors.OutOfRangeError:
+                    break
             # for training runs, there is an extra output argument. kill it
             if len(evald_ops_this_batch) > 4:
                 tc, rc, rc_v, kl, _= evald_ops_this_batch
