@@ -809,7 +809,7 @@ class LFADS(object):
             ext_input_bxtxi = data_dict[ext_input_kind]
 
             this_batch = data_extxd[example_idxs,:,:]
-            ext_input_batch = ext_input_bxtxi[example_idxs,:,:]
+            ext_input_batch = ext_input_bxtxi[example_idxs, :, :] if ext_input_bxtxi is not None else None
 
             feed_dict = self.build_feed_dict(name, this_batch, ext_input_batch, keep_prob=keep_prob,
                                              run_type = kind_dict("train"),
