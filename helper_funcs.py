@@ -637,6 +637,7 @@ from tensorflow.python.framework import tensor_util
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import random_ops
+
 # dropout that also returns the binary mask
 def dropout(x, keep_prob, noise_shape=None, seed=None, name=None,
             binary_tensor=None):  # pylint: disable=invalid-name
@@ -689,8 +690,8 @@ def dropout(x, keep_prob, noise_shape=None, seed=None, name=None,
 
     if binary_tensor is None:
         # Do nothing if we know keep_prob == 1
-        if tensor_util.constant_value(keep_prob) == 1:
-          return x, None
+        #if tensor_util.constant_value(keep_prob) == 1:
+        #   return x, None
 
         noise_shape = noise_shape if noise_shape is not None else array_ops.shape(x)
         # uniform [keep_prob, 1.0 + keep_prob)

@@ -340,6 +340,7 @@ def build_model(hps, datasets=None):
     print("Save directory %s does not exist, creating it." % hps.lfads_save_dir)
     os.makedirs(hps.lfads_save_dir)
 
+  """
   cp_pb_ln = hps.checkpoint_pb_load_name
   cp_pb_ln = 'checkpoint' if cp_pb_ln == "" else cp_pb_ln
   if cp_pb_ln == 'checkpoint':
@@ -375,7 +376,8 @@ def build_model(hps, datasets=None):
     train_step_str = re.search('-[0-9]+$', ckpt.model_checkpoint_path).group()
   else:
     train_step_str = '-0'
-
+  """
+  train_step_str = '-0'
   fname = 'hyperparameters' + train_step_str + '.txt'
   hp_fname = os.path.join(hps.lfads_save_dir, fname)
   hps_for_saving = jsonify_dict(hps)
@@ -515,9 +517,9 @@ def train(hps, datasets):
       name(string)-> data dictionary mapping (See top of lfads.py).
   """
   model = build_model(hps, datasets=datasets)
-  if hps.do_reset_learning_rate:
-    sess = tf.get_default_session()
-    sess.run(model.learning_rate.initializer)
+  #if hps.do_reset_learning_rate:
+  #  sess = tf.get_default_session()
+  #  sess.run(model.learning_rate.initializer)
 
   model.train_model(datasets)
 
@@ -712,7 +714,9 @@ def main(_):
                           log_device_placement=False)
   if FLAGS.allow_gpu_growth:
     config.gpu_options.allow_growth = True
-  sess = tf.Session(config=config)
+  #sess = tf.Session(config=config)
+  train(hps, datasets)
+  """
   with sess.as_default():
     with tf.device(hps.device):
       if hps.kind == kind_dict("train"):
@@ -725,7 +729,7 @@ def main(_):
         write_model_parameters(hps, hps.output_filename_stem, datasets)
       else:
         assert False, ("Kind %s is not implemented. " % kind)
-
+  """
 
 if __name__ == "__main__":
     tf.app.run()
