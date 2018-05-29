@@ -35,6 +35,20 @@ def _case_with_no_default(pairs):
             return tf.identity(pairs[0][1]())
     return tf.case(pairs, _default_value_fn, exclusive=True)
 
+class Logger(object):
+    def __init__(self, log_file):
+        self.terminal = sys.stdout
+        self.log = open(log_file, "a")
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)  
+
+    def flush(self):
+        #this flush method is needed for python 3 compatibility.
+        #this handles the flush command by doing nothing.
+        #you might want to specify some extra behavior here.
+        pass    
 
 class LFADS(object):
 
@@ -44,8 +58,11 @@ class LFADS(object):
         def entry_stop_gradients(target, mask):
             mask_h = 1. - mask
             return tf.stop_gradient(mask_h * target) + mask * target
+            
+		# save the stdout to a log file and prints it on the screen
+        sys.stdout = Logger(os.path.join(hps['lfads_save_dir'], "lfads_output.log"))
 
-    # build the graph
+    	# build the graph
         # set the learning rate, defaults to the hyperparam setting
         self.learning_rate = tf.Variable(float(hps['learning_rate_init']), trainable=False, name="learning_rate")
 
@@ -60,7 +77,7 @@ class LFADS(object):
         #  - this sets a common dimension across datasets, allowing datasets to have different sizes
         #  if not multiple datasets and no input_factors_dim is defined, we'll hook data straight to encoders
 
-       # define all placeholders
+        # define all placeholders
         with tf.variable_scope('placeholders'):
             # input data (what are we training on)
             # we're going to try setting input dimensionality to None
