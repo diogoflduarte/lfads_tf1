@@ -58,8 +58,9 @@ class LFADS(object):
         def entry_stop_gradients(target, mask):
             mask_h = 1. - mask
             return tf.stop_gradient(mask_h * target) + mask * target
-            
+
 		# save the stdout to a log file and prints it on the screen
+		mkdir_p(hps['lfads_save_dir'])
         sys.stdout = Logger(os.path.join(hps['lfads_save_dir'], "lfads_output.log"))
 
     	# build the graph
