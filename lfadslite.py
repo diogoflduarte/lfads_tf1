@@ -15,7 +15,7 @@ from helper_funcs import DiagonalGaussianFromInput, DiagonalGaussian, DiagonalGa
 from helper_funcs import BidirectionalDynamicRNN, DynamicRNN, LinearTimeVarying
 from helper_funcs import KLCost_GaussianGaussian, Poisson
 from helper_funcs import write_data
-from helper_funcs import printer
+from helper_funcs import printer, mkdir_p
 #from plot_funcs import plot_data, close_all_plots
 #from data_funcs import read_datasets
 from customcells import ComplexCell
@@ -59,8 +59,8 @@ class LFADS(object):
             mask_h = 1. - mask
             return tf.stop_gradient(mask_h * target) + mask * target
 
-		# save the stdout to a log file and prints it on the screen
-		mkdir_p(hps['lfads_save_dir'])
+        # save the stdout to a log file and prints it on the screen
+	mkdir_p(hps['lfads_save_dir'])
         sys.stdout = Logger(os.path.join(hps['lfads_save_dir'], "lfads_output.log"))
 
     	# build the graph
