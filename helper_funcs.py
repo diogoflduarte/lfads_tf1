@@ -9,6 +9,8 @@ import os
 import h5py
 import json
 import sys
+import logging
+import errno
 
 
 def kind_dict_definition():
@@ -37,6 +39,41 @@ def printer(data):
     # prints on the same line
     sys.stdout.write("\r\x1b[K" + data.__str__())
     sys.stdout.flush()
+
+
+def mkdir_p(path):
+    try:
+        os.makedirs(path)
+    except OSError as exc:  # Python >2.5
+        if exc.errno == errno.EEXIST and os.path.isdir(path):
+            pass
+        else:
+            raise
+
+class hps_dict_to_obj(dict):
+  """Helper class allowing us to access hps dictionary more easily."""
+  def __getattr__(self, key):
+    if key in self:
+      return self[key]
+    else:
+      assert False, ("%s does not exist." % key)
+  def __setattr__(self, key, value):
+    self[key] = value
+
+class Logger(object):
+    def __init__(self, log_file):
+        self.terminal = sys.stdout
+        self.log = open(log_file, "a")
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+
+    def flush(self):
+        #this flush method is needed for python 3 compatibility.
+        #this handles the flush command by doing nothing.
+        #you might want to specify some extra behavior here.
+        pass
 
 def write_data(data_fname, data_dict, use_json=False, compression=None):
   """Write data in HDF5 format.

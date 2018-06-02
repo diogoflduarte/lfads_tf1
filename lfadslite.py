@@ -1,9 +1,12 @@
+from __future__ import print_function
 import tensorflow as tf
 import numpy as np
-#import sys
+import sys
 import time
 import os
 import logging
+import json
+import shlex
 #import random
 #import matplotlib.pyplot as plt
 
@@ -14,7 +17,7 @@ from helper_funcs import ListOfRandomBatches, kind_dict, kind_dict_key
 from helper_funcs import DiagonalGaussianFromInput, DiagonalGaussian, DiagonalGaussianFromExisting, diag_gaussian_log_likelihood
 from helper_funcs import BidirectionalDynamicRNN, DynamicRNN, LinearTimeVarying
 from helper_funcs import KLCost_GaussianGaussian, Poisson
-from helper_funcs import write_data
+from helper_funcs import write_data, hps_dict_to_obj, mkdir_p
 from helper_funcs import printer
 #from plot_funcs import plot_data, close_all_plots
 from data_funcs import load_datasets
@@ -35,65 +38,105 @@ def _case_with_no_default(pairs):
             return tf.identity(pairs[0][1]())
     return tf.case(pairs, _default_value_fn, exclusive=True)
 
-class hps_dict_to_obj(dict):
-  """Helper class allowing us to access hps dictionary more easily."""
+class Logger(object):
+    def __init__(self, log_file):
+        self.logfile = log_file
+        if not os.path.exists(log_file):
+            open(log_file, 'w').close()
+    def printlog(self, *args):
+        strtext = (('{} ' * len(args)).format(*args))[:-1]
+        #self.logfile.write(strtext)
+        with open(self.logfile, 'a') as f:
+            print(strtext, file=f)
+            print(strtext)
+            
+# Custom logging filter
+class CustomFilter(logging.Filter):
+    """ pass the messages that contain "total_cost" only """
+    def filter(self, record):
+        isCost = 'total' in record.getMessage()
+        return isCost
 
-  def __getattr__(self, key):
-    if key in self:
-      return self[key]
-    else:
-      assert False, ("%s does not exist." % key)
-  def __setattr__(self, key, value):
-    self[key] = value
+
+class CustomFormatter(logging.Formatter):
+    def parse_message(self, msg):
+        msg = "".join(msg.split())
+        # separate the costs from the (time taken)
+        msg = msg.split('(')
+        tmp_msg = msg[0].split(':')
+        msg[0] = tmp_msg[-1]
+        val_dict = dict(x.split('=') for x in msg[0].split(','))
+        val_dict['time'] = msg[1].replace('sec)', '') if len(msg) > 1 else 'NA'
+        return val_dict
+
+    def format(self, record):
+        res = super(CustomFormatter, self).format(record)
+        value_dict = self.parse_message(res)
+
+        if float(value_dict.get('eval_data_mode', 0)) == 1.:
+            # evaluation on training data
+            tr_total, val_total = (value_dict.get('eval_total', 'NA'), 'NA')
+            tr_heldin, tr_heldout, val_heldin, val_heldout = (value_dict.get('eval_recon_heldin_samps', 'NA'),
+                                                              value_dict.get('eval_recon_heldout_samps', 'NA'),
+                                                              'NA', 'NA')
+        else:
+            # evaluation on validation data
+            # or during training
+            tr_total, val_total = (value_dict.get('train_total', 'NA'), value_dict.get('eval_total', 'NA'))
+            tr_heldin, tr_heldout, val_heldin, val_heldout = (value_dict.get('train_recon_heldin_samps', 'NA'),
+                                                              value_dict.get('train_recon_heldout_samps', 'NA'),
+                                                              value_dict.get('eval_recon_heldin_samps', 'NA'),
+                                                              value_dict.get('eval_recon_heldout_samps', 'NA'))
+
+        formatted_str = 'epoch, {}, step, {}, total, {}, {}, recon, {}, {}, {}, {}, time, {}'.format(
+            'NA', value_dict.get('step', 'NA'), tr_total, val_total,
+            tr_heldin, tr_heldout, val_heldin, val_heldout, value_dict.get('time', 'NA')
+        )
+        return formatted_str
+
+class TrainHook(tf.train.SessionRunHook):
+    def __init__(self, lr):
+        self.lr = lr
+    def before_run(self, run_context):
+        if self.lr is not None:
+            return tf.train.SessionRunArgs(self.lr.initializer)
+
+# todo: add decay learning rate
+# todo: add early stopping
+# todo: add posertior mean sampling
+# todo: add support for multi-session
+# todo, now resest learning rate on every call to session.run (fine for PBT but need to change it for normal run)
+# todo, allow setting checkpoint name
+# todo, saveing/loading lve checkpoint
+# todo, pass the RunConfig setting as params to train
 
 class LFADS(object):
-
-    def __init__(self, hps, datasets = None):
-
+    def __init__(self, hps, datasets):
         # store the hps
-        self.hps = hps
+        hps['n_epochs_eval'] = 1
+        self.datasets = datasets
+        self.setup_stdout_logger(hps)
 
-    def data_fn(self, hps, mode, num_epochs=10):
-        ## dev zone
+    def data_fn(self, mode, batch_size, num_epochs=None):
         # constructing Datasets using tf.data
-        datasets = load_datasets(hps['data_dir'], hps['data_filename_stem'])
+        datasets = self.datasets
+        #load_datasets(hps['data_dir'], hps['data_filename_stem'])
 
-        # q = tf.FIFOQueue(capacity=3, dtypes=tf.float32)
-        """ one way of feeding the data to the graph
-        for name, data_dict in datasets.items():
-            nexamples, ntime, data_dim = data_dict['valid_data'].shape
-            data = data_dict['train_data'].astype(np.float32)#.tolist()
-            print(data.shape)
-            data_tens = tf.convert_to_tensor(data, dtype=tf.float32)
-            # trial_batch = tf.train.shuffle_batch([data_tens], enqueue_many=True, batch_size=hps['batch_size'], capacity=3000, min_after_dequeue=50, allow_smaller_final_batch=True)
-
-            random_trial = tf.train.slice_input_producer([data_tens], shuffle=True, capacity=3000)
-            #print(random_trial.get_shape())
-
-        trial_batch = tf.train.batch([random_trial], batch_size=hps['batch_size'], enqueue_many=True, capacity=3000, )
-
-        dataset_ph = trial_batch #trial_batch
-
-
-        #enqueue_op = q.enqueue_many(trial_batch)
-        #qr = tf.train.QueueRunner(q, [enqueue_op] * 1)
-        #tf.train.add_queue_runner(qr)
-        """
-
-        # """ tf.data
         dataset = {}
         for name, data_dict in datasets.items():
             #nexamples, ntime, data_dim = data_dict['valid_data'].shape
             if mode == tf.estimator.ModeKeys.TRAIN:
                 dataset[name] = tf.data.Dataset.from_tensor_slices(data_dict['train_data'].astype(np.float32))
                 dataset[name] = dataset[name].cache()
-                dataset[name] = dataset[name].shuffle(buffer_size=hps['batch_size'] * 10).repeat(num_epochs)
+                dataset[name] = dataset[name].shuffle(buffer_size=batch_size*10).repeat(num_epochs).batch(batch_size)
                 dataset[name] = dataset[name].prefetch(buffer_size=10)
                 dataset[name] = dataset[name].apply(tf.contrib.data.prefetch_to_device("/gpu:0"))
+                data_mode = tf.constant(1)
             else:
                 dataset[name] = tf.data.Dataset.from_tensor_slices(data_dict['valid_data'].astype(np.float32))
                 dataset[name] = dataset[name].cache().repeat(1)
-                #dataset[name] = dataset[name].batch(hps['batch_size'])
+                dataset[name] = dataset[name].batch(batch_size)
+                data_mode = tf.constant(2)
 
             # following line didn't speed up
             # dataset_tr[name] = dataset_tr[name].apply(tf.contrib.data.shuffle_and_repeat(10000, 100))
@@ -111,20 +154,19 @@ class LFADS(object):
 
         next_element = iterator.get_next()
 
-        return next_element, tf.convert_to_tensor(name)
+        return {'data':next_element, 'data_name':tf.convert_to_tensor(name), 'data_mode':data_mode}
 
-    def lfads_model_fn(self, features, labels, mode, params):
+    def lfads_model_fn(self, features, mode, params):
         # to stop certain gradients paths through the graph in backprop
         def entry_stop_gradients(target, mask):
             mask_h = tf.abs(1. - mask)
             return tf.stop_gradient(mask_h * target) + mask * target
 
         # alias for names
-        dataset_ph = features
+        dataset_ph = features['data']
         hps = hps_dict_to_obj(params)
-        # labels contain the name of the dataset from which features are provided
-        # label is the tensor of repeating dataset names
-        dataName = labels
+        dataName = features['data_name']
+        data_mode = features['data_mode']
 
         # only when training do
         if mode == tf.estimator.ModeKeys.TRAIN:
@@ -148,10 +190,8 @@ class LFADS(object):
         # decay learning rate op
         learning_rate_decay_op = learning_rate.assign(\
             learning_rate * hps['learning_rate_decay_factor'])
+        self.learning_rate = learning_rate
 
-        #dataName = tf.placeholder(tf.string, shape=(), name='dataset_name')
-
-        # dev zone
 
         # make placeholders for all the input and output adapter matrices
         ndatasets = hps.ndatasets
@@ -285,7 +325,7 @@ class LFADS(object):
         # data_dim_tensor = tf.shape(dataset_ph)[2]
         # dataset_dims = dataset_ph.get_shape()
         # data_dim = dataset_dims[2]
-        # print(data_dim)
+        # self.printlog(data_dim)
 
         # coordinated dropout
         if hps['keep_ratio'] != 1.0:
@@ -601,10 +641,11 @@ class LFADS(object):
         # rec_cost_train = -log_p_train
         # ones_ratio = tf.reduce_mean(cv_binary_mask_batch)
 
-        rec_cost_train = - (1. / cv_keep_ratio) * \
+
+        rec_cost_heldin_samps = - (1. / cv_keep_ratio) * \
                               tf.reduce_sum(loglikelihood_b_t * cv_binary_mask_batch) / tf.cast(
             graph_batch_size, tf.float32)
-        # rec_cost_train = - tf.reduce_sum(loglikelihood_b_t * cv_binary_mask_batch) / graph_batch_size
+        # rec_cost_heldin_samps = - tf.reduce_sum(loglikelihood_b_t * cv_binary_mask_batch) / graph_batch_size
         # rec_cost_train /= ones_ratio
 
         # Valid cost for each trial
@@ -612,15 +653,15 @@ class LFADS(object):
         #    tf.reduce_mean(loglikelihood_b_t * (1. - cv_binary_mask_batch), [2] ), [1] )
         # total rec cost (avg over all trials in batch)
         # log_p_valid = tf.reduce_mean( log_p_b_valid, [0])
-        # rec_cost_valid = -log_p_valid
+        # rec_cost_heldout_samps = -log_p_valid
         if cv_keep_ratio != 1.0:
-            rec_cost_valid = - (1. / (1. - cv_keep_ratio)) * \
+            rec_cost_heldout_samps = - (1. / (1. - cv_keep_ratio)) * \
                                   tf.reduce_sum(loglikelihood_b_t * (1. - cv_binary_mask_batch)) / tf.cast(
                 graph_batch_size, tf.float32)
         else:
-            rec_cost_valid = tf.constant(np.nan)
-        # rec_cost_valid = - tf.reduce_sum(loglikelihood_b_t * (1. - cv_binary_mask_batch)) / graph_batch_size
-        # rec_cost_valid /= (1. - ones_ratio)
+            rec_cost_heldout_samps = tf.constant(np.nan)
+        # rec_cost_heldout_samps = - tf.reduce_sum(loglikelihood_b_t * (1. - cv_binary_mask_batch)) / graph_batch_size
+        # rec_cost_heldout_samps /= (1. - ones_ratio)
 
         # calculate L2 costs for each network
         # normalized by number of parameters.
@@ -635,13 +676,13 @@ class LFADS(object):
                             'l2_ci_enc_2_co_in',
                             ]
 
-        #print(l2_reg_var_lists)
+        #self.printlog(l2_reg_var_lists)
         l2_reg_scales = [hps.l2_gen_scale, hps.l2_con_scale,
                          hps.l2_ic_enc_scale, hps.l2_ci_enc_scale,
                          hps.l2_gen_2_factors_scale,
                          hps.l2_ci_enc_2_co_in]
         for l2_reg, l2_scale in zip(l2_reg_var_lists, l2_reg_scales):
-            #print(l2_scale)
+            #self.printlog(l2_scale)
             if l2_scale == 0:
                 continue
             l2_reg_vars = tf.get_collection(l2_reg)
@@ -651,13 +692,13 @@ class LFADS(object):
                 l2_numels.append(numel_f)
                 v_l2 = tf.reduce_sum(v * v)
                 l2_costs.append(0.5 * l2_scale * v_l2)
-        #print(l2_numels)
+        #self.printlog(l2_numels)
         if l2_numels:
-            #print("L2 cost applied")
+            #self.printlog("L2 cost applied")
             l2_cost = tf.add_n(l2_costs) / tf.add_n(l2_numels)
 
         ## calculate total training cost
-        total_cost = l2_cost + kl_cost + rec_cost_train
+        total_cost = l2_cost + kl_cost + rec_cost_heldin_samps
 
         # get the list of trainable variables
         trainable_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
@@ -683,84 +724,115 @@ class LFADS(object):
             zip(gradients, trainable_vars), global_step=global_step)
 
         # print Costs
-        # total_cost = tf.Print(total_cost, [tf.train.get_global_step(), total_cost, rec_cost_train])
+        # total_cost = tf.self.printlog(total_cost, [tf.train.get_global_step(), total_cost, rec_cost_train])
 
         # Set logging hook for tf.estimator
         logging_hook = tf.train.LoggingTensorHook({'step': global_step,
-                                                   'total_cost': total_cost,
-                                                   'recon_cost_train': rec_cost_train,
-                                                   'recon_cost_valid': rec_cost_valid,
+                                                   'train_total': total_cost,
+                                                   'train_recon_heldin_samps': rec_cost_heldin_samps,
+                                                   'train_recon_heldout_samps': rec_cost_heldout_samps,
                                                    'l2_cost': l2_cost,
                                                    'kl_cost': kl_cost,
                                                    },
                                                   every_n_iter=1)
         # metric for eval
         eval_metric_ops = {
-            'rec_cost_train': (rec_cost_train, rec_cost_train),
-            'total_cost': (total_cost, total_cost)
+            'eval_data_mode': tf.metrics.mean(data_mode),
+            'eval_recon_heldin_samps': tf.metrics.mean(rec_cost_heldin_samps),
+            'eval_recon_heldout_samps': tf.metrics.mean(rec_cost_heldout_samps),
+            'eval_total': tf.metrics.mean(total_cost),
         }
 
         # Provide an estimator spec for `ModeKeys.EVAL` and `ModeKeys.TRAIN` modes.
         return tf.estimator.EstimatorSpec(mode=mode,
-                                                    loss=total_cost,
-                                                    train_op=train_op,
-                                                    eval_metric_ops=eval_metric_ops,
-                                          training_hooks= [logging_hook])
+                                          loss=total_cost,
+                                          train_op=train_op,
+                                          eval_metric_ops=eval_metric_ops,
+                                          training_hooks=[logging_hook])
 
-    def setup_tf_logger(self):
+    def setup_stdout_logger(self, hps):
+        # save the stdout to a log file and prints it on the screen
+        mkdir_p(hps['lfads_save_dir'])
+        logger = Logger(os.path.join(hps['lfads_save_dir'], "lfads_output.log"))
+        self.printlog = logger.printlog
+
+    def setup_tf_logger(self, hps):
         # get TF logger
         log = logging.getLogger('tensorflow')
         log.setLevel(logging.INFO)
-
         # create formatter and add it to the handlers
-        #formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        formatter = logging.Formatter('%(message)s')
-            #'%(total_cost)d %(l2_cost)d %(recon_cost_valid)d - %(recon_cost_train)d'
-                                      #'%(kl_cost)d %(time)d ')
-        #"epoch,%d, step,%d, total,%.6E,%.6E, \
-        #            recon,%.6E,%.6E,%.6E,%.6E, R^2 (Held-in, Held-out), %.6E, %.6E, %.6E, %.6E," \
-        #"kl,%.6E,%.6E, l2,%.6E, klweight,%.6E, l2weight,%.6E\n"
-
+        formatter = CustomFormatter()
         # create file handler to save logging
-        csv_file = os.path.join(self.hps.lfads_save_dir, self.hps.csv_log + '.csv')
+        csv_file = os.path.join(hps.lfads_save_dir, hps.csv_log + '.csv')
         fh = logging.FileHandler(csv_file)
+        fh.addFilter(CustomFilter())
         fh.setLevel(logging.INFO)
         fh.setFormatter(formatter)
         log.addHandler(fh)
 
-    def train_model(self, datasets, target_num_epochs=None):
+    def train_model(self, hps, run_mode='standard', max_epochs=None):
+        params = {}
+        for key, value in hps.iteritems():
+            params[key] = value
         tf.logging.set_verbosity(tf.logging.INFO)
-        self.setup_tf_logger()
+        self.setup_stdout_logger(hps)
+        self.setup_tf_logger(hps)
         config = tf.ConfigProto(allow_soft_placement=True,
                                 log_device_placement=False)
         config.gpu_options.allow_growth = True
-        run_config = tf.contrib.learn.RunConfig(
+        run_config = tf.estimator.RunConfig(
             save_checkpoints_steps=10,
-            keep_checkpoint_max=10,
+            keep_checkpoint_max=hps['max_ckpt_to_keep'],
             #tf_random_seed=19830610,
-            model_dir = self.hps['lfads_save_dir'],
+            model_dir = hps['lfads_save_dir'],
             session_config=config
         )
-        hps = {}
-        for key, value in self.hps.iteritems():
-            hps[key] = value
-        train_input = lambda: self.data_fn(hps, tf.estimator.ModeKeys.TRAIN, num_epochs=10)
-        eval_input = lambda: self.data_fn(hps, tf.estimator.ModeKeys.EVAL)
-        lfads = tf.estimator.Estimator(model_fn=self.lfads_model_fn, params=hps, config=run_config)
-        train_spec = tf.estimator.TrainSpec(train_input, max_steps=300)
-        eval_spec = tf.estimator.EvalSpec(eval_input,
-                                          start_delay_secs=60,
-                                          steps=1,)
-                                          #throttle_secs = 3000)
-                                          #exporters=[exporter],
-                                          #name='census-eval')
+        if run_mode.lower() == 'pbt':
+            assert max_epochs, 'You must specify max_epochs when run_mode is PBT!'
+            train_input = lambda: self.data_fn(tf.estimator.ModeKeys.TRAIN, batch_size=hps['batch_size'],
+                                               num_epochs=max_epochs)
+            eval_input_train = lambda: self.data_fn(tf.estimator.ModeKeys.TRAIN, batch_size=10000,
+                                               num_epochs=1)
+            eval_input_valid = lambda: self.data_fn(tf.estimator.ModeKeys.EVAL, batch_size=10000)
+            lfads = tf.estimator.Estimator(model_fn=self.lfads_model_fn, params=params, config=run_config)
+            lr = self.learning_rate if hps['do_reset_learning_rate'] else None
+            train_hook = TrainHook(lr)
+            lfads.train(train_input, hooks=[train_hook])
+            train_costs = lfads.evaluate(eval_input_train, name='train_data')
+            valid_costs = lfads.evaluate(eval_input_valid, name='valid_data')
+            self.printlog('Training costs:', train_costs)
+            self.printlog('Validation costs:', valid_costs)
 
-        tf.estimator.train_and_evaluate(lfads, train_spec, eval_spec)
+            # Making parameters available for lfads_wrappper
+            if hps['checkpoint_pb_load_name'] == 'checkpoint_lve':
+                # if we are returning lve costs
+                assert 0, 'lve is not implemented with tf.estimator'
+                #if is_lve:
+                #    self.trial_recon_cost = smth_trial_val_recn_cost
+                #    self.samp_recon_cost = smth_samp_val_recn_cost
+            else:
+                self.trial_recon_cost = valid_costs['eval_recon_heldin_samps']
+                self.samp_recon_cost = train_costs['eval_recon_heldout_samps']
+
+        else:
+            train_input = lambda: self.data_fn(tf.estimator.ModeKeys.TRAIN, batch_size=hps['batch_size'], num_epochs=hps['n_epochs_eval'])
+            eval_input = lambda: self.data_fn(tf.estimator.ModeKeys.EVAL, batch_size=1e10)
+            lfads = tf.estimator.Estimator(model_fn=self.lfads_model_fn, params=hps, config=run_config)
+            train_spec = tf.estimator.TrainSpec(train_input, max_steps=300)
+            eval_spec = tf.estimator.EvalSpec(eval_input,
+                                              #start_delay_secs=10,
+                                              steps=None,
+                                              #throttle_secs = 50
+                                              )
+                                              #exporters=[exporter],
+                                              #name='census-eval')
+
+            tf.estimator.train_and_evaluate(lfads, train_spec, eval_spec)
         #lfads.train(input_fn=data_fn)
         #eval_out = lfads.evaluate(input_fn=data_fn, steps=1)
-        #print(eval_out)
+        #self.printlog(eval_out)
         #pred_out = lfads.predict(input_fn=data_fn)
-        #print(pred_out['output_dist_params'])
+        #self.printlog(pred_out['output_dist_params'])
 
     def __train_model(self, datasets, target_num_epochs=None):
     # this is the main loop for training a model
@@ -802,7 +874,7 @@ class LFADS(object):
                              kl_co_weight=hps['kl_co_weight'])
         kl_weight = hps['kl_ic_weight']
         train_step = session.run(self.train_step)
-        print("Epoch:%d, step:%d (TRAIN, VALID): total: %.2f, %.2f\
+        self.printlog("Epoch:%d, step:%d (TRAIN, VALID): total: %.2f, %.2f\
         recon: %.2f, %.2f, %.2f,    kl: %.2f, %.2f, kl weight: %.2f" % \
               (-1, train_step, 0, val_total_cost,
                0, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, 0, val_kl_cost,
@@ -819,11 +891,11 @@ class LFADS(object):
             # should we stop?
             if target_num_epochs is None:
                 if new_lr < hps['learning_rate_stop']:
-                    print("Learning rate criteria met")
+                    self.printlog("Learning rate criteria met")
                     break
             else:
                 if nepoch == target_num_epochs:  # nepoch starts at 0
-                    print("Num epoch criteria met. "
+                    self.printlog("Num epoch criteria met. "
                           "Completed {} epochs.".format(nepoch))
                     break
 
@@ -839,7 +911,7 @@ class LFADS(object):
                                  kl_ic_weight = hps['kl_ic_weight'],
                                  kl_co_weight = hps['kl_co_weight'])
             epoch_time = time.time() - start_time
-            print("Elapsed time: %f" %epoch_time)
+            self.printlog("Elapsed time: %f" %epoch_time)
 
             val_total_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, val_kl_cost = \
                 self.valid_epoch(datasets,
@@ -847,7 +919,7 @@ class LFADS(object):
                                  kl_co_weight = hps['kl_co_weight'])
 
             if np.isnan(tr_total_cost) or np.isnan(val_total_cost):
-                print('Nan found in training or validation cost evaluation. Training stopped!')
+                self.printlog('Nan found in training or validation cost evaluation. Training stopped!')
                 break
 
             # Evaluate the model with posterior mean sampling
@@ -911,7 +983,7 @@ class LFADS(object):
 
             kl_weight = hps['kl_ic_weight']
             train_step = session.run(self.train_step)
-            print("Epoch:%d, step:%d (TRAIN, VALID_SAMP, VALID_TRIAL): total: %.4f, %.4f,\
+            self.printlog("Epoch:%d, step:%d (TRAIN, VALID_SAMP, VALID_TRIAL): total: %.4f, %.4f,\
             recon: %.4f, %.4f, %.4f, R^2 (T/V: Held-in, Held-out), %.3f, %.3f, %.3f, %.3f, kl: %.4f, %.4f, kl weight: %.4f" % \
                   (nepoch, train_step, tr_total_cost, val_total_cost,
                    train_set_heldin_samp_cost, train_set_heldout_samp_cost, valid_set_heldin_samp_cost,
@@ -980,7 +1052,7 @@ class LFADS(object):
             n_lr = hps['learning_rate_n_to_compare']
             train_cost_to_use = tr_total_cost
             if len(train_costs) > n_lr and train_cost_to_use > np.max(train_costs[-n_lr:]):
-                print("Decreasing learning rate")
+                self.printlog("Decreasing learning rate")
                 self.run_learning_rate_decay_opt()
 
             train_costs.append(train_cost_to_use)
@@ -1068,7 +1140,7 @@ class LFADS(object):
         E, T, D  = data_extxd.shape
         E_to_process = hps.ps_nexamples_to_process
         if E_to_process > E:
-          print("Setting number of posterior samples to process to : %d" % E)
+          self.printlog("Setting number of posterior samples to process to : %d" % E)
           E_to_process = E
 
         # make a bunch of placeholders to store the posterior sample means
@@ -1096,7 +1168,7 @@ class LFADS(object):
         data_bxtxd = data_extxd[0:E_to_process]
         for rep in range(pm_batch_size):
             printer("Running repetitions %d of %d." % (rep + 1, pm_batch_size))
-            #print("Running %d of %d." % (es_idx+1, E_to_process))
+            #self.printlog("Running %d of %d." % (es_idx+1, E_to_process))
             #example_idxs = es_idx * np.ones(batch_size, dtype=np.int32)
             # run the model
             mv = self.eval_model_runs_batch(data_name, data_bxtxd,
@@ -1148,7 +1220,7 @@ class LFADS(object):
                 if self.hps.co_dim > 0:
                     controller_outputs = controller_outputs + model_values['controller_outputs']
 
-        print("")
+        self.printlog("")
         model_runs = {}
         model_runs['gen_ics'] = gen_ics
         model_runs['gen_states'] = gen_states
@@ -1220,12 +1292,12 @@ class LFADS(object):
             else:
               fname = output_fname + data_name + '_' + data_kind + '_' + kind
 
-            print("Writing data for %s data and kind %s to file %s." % (data_name, data_kind, fname))
+            self.printlog("Writing data for %s data and kind %s to file %s." % (data_name, data_kind, fname))
             model_runs = self.eval_model_runs_avg_epoch(data_name, data_extxd)
             all_model_runs.append(model_runs)
             full_fname = os.path.join(hps.lfads_save_dir, fname)
             write_data(full_fname, model_runs, compression='gzip')
-            print("Done.")
+            self.printlog("Done.")
 
         return all_model_runs
 

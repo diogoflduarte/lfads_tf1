@@ -521,7 +521,8 @@ def train(hps, datasets):
   #  sess = tf.get_default_session()
   #  sess.run(model.learning_rate.initializer)
 
-  model.train_model(datasets)
+  # temporary for testing:
+  model.train_model(hps, run_mode='pbt', max_epochs=1)
 
 
 def write_model_runs(hps, datasets, output_fname=None):
