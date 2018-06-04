@@ -186,10 +186,10 @@ class LFADS(object):
         kl_co_weight = tf.convert_to_tensor(hps.kl_co_weight)
 
         # set the learning rate, defaults to the hyperparam setting
-        learning_rate = tf.Variable(float(hps['learning_rate_init']), trainable=False, name="learning_rate")
+        learning_rate = hps['learning_rate_init'] #tf.Variable(float(hps['learning_rate_init']), trainable=False, name="learning_rate")
         # decay learning rate op
-        learning_rate_decay_op = learning_rate.assign(\
-            learning_rate * hps['learning_rate_decay_factor'])
+        #learning_rate_decay_op = learning_rate.assign(\
+        #    learning_rate * hps['learning_rate_decay_factor'])
         self.learning_rate = learning_rate
 
 
@@ -795,7 +795,7 @@ class LFADS(object):
                                                num_epochs=1)
             eval_input_valid = lambda: self.data_fn(tf.estimator.ModeKeys.EVAL, batch_size=10000)
             lfads = tf.estimator.Estimator(model_fn=self.lfads_model_fn, params=params, config=run_config)
-            lr = self.learning_rate if hps['do_reset_learning_rate'] else None
+            lr = None #self.learning_rate if hps['do_reset_learning_rate'] else None
             train_hook = TrainHook(lr)
             lfads.train(train_input, hooks=[train_hook])
             train_costs = lfads.evaluate(eval_input_train, name='train_data')
