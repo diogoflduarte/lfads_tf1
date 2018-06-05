@@ -73,7 +73,7 @@ class LFADS(object):
             return tf.stop_gradient(mask_h * target) + mask * target
 
         # save the stdout to a log file and prints it on the screen
-	mkdir_p(hps['lfads_save_dir'])
+        mkdir_p(hps['lfads_save_dir'])
         #sys.stdout = Logger(os.path.join(hps['lfads_save_dir'], "lfads_output.log"))
         logger = Logger(os.path.join(hps['lfads_save_dir'], "lfads_output.log"))
         self.printlog = logger.printlog
@@ -98,9 +98,8 @@ class LFADS(object):
             # input data (what are we training on)
             # we're going to try setting input dimensionality to None
             #  so datasets with different sizes can be used
-            self.dataset_ph = tf.placeholder(tf.float32, shape = [None, hps['num_steps'], 29], name='input_data')
-            print(hps)
-            self.cv_rand_mask = tf.placeholder(tf.float32, shape=[None, hps['num_steps'], 29], name='cv_rand_mask')
+            self.dataset_ph = tf.placeholder(tf.float32, shape = [None, hps['num_steps'], None], name='input_data')
+            self.cv_rand_mask = tf.placeholder(tf.float32, shape=[None, hps['num_steps'], None], name='cv_rand_mask')
             # dropout keep probability
             #   enumerated in helper_funcs.kind_dict
             self.keep_prob = tf.placeholder(tf.float32, name='keep_prob')
@@ -134,8 +133,8 @@ class LFADS(object):
         self.fns_out_fac_bs = fns_out_fac_bs = [None] * ndatasets
         self.datasetNames = dataset_names = hps.dataset_names
         # specific to lfadslite - need to make placeholders for the cross validation dropout masks
-        #self.random_masks_np = random_masks_np = [None] * ndatasets
-        #self.fns_cv_binary_masks = fns_cv_binary_masks = [None] * ndatasets
+        #dataset_dims = [None] * ndatasets
+        fns_this_dataset_dims = [None] * ndatasets
 
         
         # figure out the input (dataset) dimensionality
@@ -194,14 +193,10 @@ class LFADS(object):
             #if hps.cv_rand_seed:
             #    np.random.seed( int(hps.cv_rand_seed) + d)
 
-            # Step 2) make a cross-validation random mask for each dataset
-            # uniform [cv_keep_ratio, 1.0 + cv_keep_ratio)
-            #random_mask_np_this_dataset = self.cv_keep_ratio + np.random.rand(hps['num_steps'], hps.dataset_dims[ name ])
-            # convert to 0 and 1
-            #random_mask_np_this_dataset = np.floor(random_mask_np_this_dataset)
-            #random_masks_np[ d ] = random_mask_np_this_dataset
+            # Step 2) make a get the dataset dim (work around dim error in dynamic rnn)
+            #dataset_dims[ d ] = hps.dataset_dims[ name ]
             # converting to tensor
-            #fns_cv_binary_masks[ d ] = makelambda( tf.convert_to_tensor(self.random_masks_np[ d ], dtype=tf.float32) )
+            fns_this_dataset_dims[ d ] = makelambda( tf.ones((hps['num_steps'], hps.dataset_dims[ name ])) )
 
             #reset the np random seed to enforce randomness for the other random draws
             #np.random.seed()
@@ -237,7 +232,7 @@ class LFADS(object):
         pf_pairs_in_fac_bs = zip(preds, fns_in_fac_bs)
         pf_pairs_out_fac_Ws = zip(preds, fns_out_fac_Ws)
         pf_pairs_out_fac_bs = zip(preds, fns_out_fac_bs)
-        #pf_pairs_cv_binary_masks = zip(preds, fns_cv_binary_masks )
+        pf_pairs_this_dataset_dims = zip(preds, fns_this_dataset_dims )
 
         # now, choose the ones for this session
         if hps.in_factors_dim > 0:
@@ -246,17 +241,15 @@ class LFADS(object):
             
         this_dataset_out_fac_W = _case_with_no_default( pf_pairs_out_fac_Ws )
         this_dataset_out_fac_b = _case_with_no_default( pf_pairs_out_fac_bs )
-        #this_dataset_cv_binary_mask = _case_with_no_default( pf_pairs_cv_binary_masks )
+        this_dataset_dims = _case_with_no_default( pf_pairs_this_dataset_dims )
                 
 
         
-        
+        # batch_size - read from the data placeholder
+        graph_batch_size = tf.shape(self.dataset_ph)[0]
         # can we infer the data dimensionality for the random mask?
-        data_dim_tensor = tf.shape(self.dataset_ph)[2]
-        dataset_dims = self.dataset_ph.get_shape()
-        data_dim = dataset_dims[2]
+        seq_len = hps['num_steps']
 
-        self.dataset_ph = tf.Print(self.dataset_ph, [self.dataset_ph])
         # coordinated dropout
         if hps['keep_ratio'] != 1.0:
             # coordinated dropout enabled on inputs
@@ -266,16 +259,13 @@ class LFADS(object):
             masked_dataset_ph = self.dataset_ph
 
         # replicate the cross-validation binary mask for this dataset for all elements of the batch
-        self.cv_binary_mask_batch = self.cv_rand_mask
-        #self.cv_binary_mask_batch = tf.expand_dims(tf.ones([graph_batch_size, 1]), 1) * \
-        #                            this_dataset_cv_binary_mask
+        # work around error in dynamic rnn when input dim is None
+
+        self.cv_binary_mask_batch = self.cv_rand_mask * tf.expand_dims(tf.ones([graph_batch_size, 1]), 1) * \
+                                    this_dataset_dims
 
         # apply cross-validation dropout
-        masked_dataset_ph = masked_dataset_ph#tf.div(masked_dataset_ph, self.cv_keep_ratio) * self.cv_binary_mask_batch
-        #masked_dataset_ph = tf.Print(masked_dataset_ph, [masked_dataset_ph])
-
-        # batch_size - read from the data placeholder
-        graph_batch_size = tf.shape(masked_dataset_ph)[0]
+        masked_dataset_ph = tf.div(masked_dataset_ph, self.cv_keep_ratio) * self.cv_binary_mask_batch
 
         # define input to encoders
         if hps.in_factors_dim==0:
@@ -295,7 +285,6 @@ class LFADS(object):
                                         batch_size = graph_batch_size,
                                         clip_value = hps['cell_clip_value'],
                                         recurrent_collections=['l2_ic_enc'])
-            seq_len = hps['num_steps']
             #seq_len.set_shape([1, graph_batch_size])
             ## ic_encoder
             self.ic_enc_rnn_obj = BidirectionalDynamicRNN(
@@ -855,13 +844,9 @@ class LFADS(object):
             ext_input_bxtxi = data_dict[ext_input_kind]
 
             this_batch = data_extxd[example_idxs,:,:]
-<<<<<<< HEAD
-            this_batch_cvmask = cv_rand_mask[example_idxs,:,:] if cv_rand_mask else None
-            ext_input_batch = ext_input_bxtxi[example_idxs, :, :] if ext_input_bxtxi else None
-=======
 
+            this_batch_cvmask = cv_rand_mask[example_idxs,:,:] if cv_rand_mask is not None else None
             ext_input_batch = ext_input_bxtxi[example_idxs, :, :] if ext_input_bxtxi is not None else None
->>>>>>> 081865c57443a2329cab79d95bfcd984943509a6
 
             feed_dict = self.build_feed_dict(name, this_batch,
                                              cv_rand_mask=this_batch_cvmask,
