@@ -10,6 +10,7 @@ import h5py
 import json
 import sys
 import warnings
+import errno
 
 def kind_dict_definition():
 # used in the graph's keep probability
