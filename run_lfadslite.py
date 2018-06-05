@@ -641,45 +641,45 @@ def clean_data_dict(data_dict):
 
   return data_dict
 
-
-def load_datasets(data_dir, data_filename_stem):
-  """Load the datasets from a specified directory.
-
-  Example files look like
-    >data_dir/my_dataset_first_day
-    >data_dir/my_dataset_second_day
-
-  If my_dataset (filename) stem is in the directory, the read routine will try
-  and load it.  The datasets dictionary will then look like
-  dataset['first_day'] -> (first day data dictionary)
-  dataset['second_day'] -> (first day data dictionary)
-
-  Args:
-    data_dir: The directory from which to load the datasets.
-    data_filename_stem: The stem of the filename for the datasets.
-
-  Returns:
-    datasets: a dataset dictionary, with one name->data dictionary pair for
-    each dataset file.
-  """
-  print("Reading data from ", data_dir)
-  datasets = utils.read_datasets(data_dir, data_filename_stem)
-  for k, data_dict in datasets.items():
-    datasets[k] = clean_data_dict(data_dict)
-
-    train_total_size = len(data_dict['train_data'])
-    if train_total_size == 0:
-      print("Did not load training set.")
-    else:
-      print("Found training set with number examples: ", train_total_size)
-
-    valid_total_size = len(data_dict['valid_data'])
-    if valid_total_size == 0:
-      print("Did not load validation set.")
-    else:
-      print("Found validation set with number examples: ", valid_total_size)
-
-  return datasets
+#
+# def load_datasets(data_dir, data_filename_stem, hps):
+#   """Load the datasets from a specified directory.
+#
+#   Example files look like
+#     >data_dir/my_dataset_first_day
+#     >data_dir/my_dataset_second_day
+#
+#   If my_dataset (filename) stem is in the directory, the read routine will try
+#   and load it.  The datasets dictionary will then look like
+#   dataset['first_day'] -> (first day data dictionary)
+#   dataset['second_day'] -> (first day data dictionary)
+#
+#   Args:
+#     data_dir: The directory from which to load the datasets.
+#     data_filename_stem: The stem of the filename for the datasets.
+#
+#   Returns:
+#     datasets: a dataset dictionary, with one name->data dictionary pair for
+#     each dataset file.
+#   """
+#   print("Reading data from ", data_dir)
+#   datasets = utils.read_datasets(data_dir, data_filename_stem)
+#   for k, data_dict in datasets.items():
+#     datasets[k] = clean_data_dict(data_dict)
+#
+#     train_total_size = len(data_dict['train_data'])
+#     if train_total_size == 0:
+#       print("Did not load training set.")
+#     else:
+#       print("Found training set with number examples: ", train_total_size)
+#
+#     valid_total_size = len(data_dict['valid_data'])
+#     if valid_total_size == 0:
+#       print("Did not load validation set.")
+#     else:
+#       print("Found validation set with number examples: ", valid_total_size)
+#
+#   return datasets
 
 
 def main(_):
@@ -693,7 +693,7 @@ def main(_):
                   kind_dict("posterior_sample_and_average"),
                   kind_dict("prior_sample"),
                   kind_dict("write_model_params")]:
-    datasets = load_datasets(hps.data_dir, hps.data_filename_stem)
+    datasets = utils.load_datasets(hps.data_dir, hps.data_filename_stem, hps)
   else:
     raise ValueError('Kind {} is not supported.'.format(kind))
 

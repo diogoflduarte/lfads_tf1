@@ -7,7 +7,7 @@ import tensorflow as tf
 
 
 
-def load_datasets(data_dir, data_filename_stem):
+def load_datasets(data_dir, data_filename_stem, hps):
   """Load the datasets from a specified directory.
 
   Example files look like
@@ -30,20 +30,27 @@ def load_datasets(data_dir, data_filename_stem):
   print("Reading data from ", data_dir)
   datasets = read_datasets(data_dir, data_filename_stem)
   for k, data_dict in datasets.items():
-    datasets[k] = clean_data_dict(data_dict)
-
     train_total_size = len(data_dict['train_data'])
     if train_total_size == 0:
       print("Did not load training set.")
     else:
       print("Found training set with number examples: ", train_total_size)
-
+      if hps.cv_keep_ratio < 1.:
+        np.random.seed(int(hps.cv_rand_seed))
+        data_dict['train_data_cvmask'] = np.floor(hps.cv_keep_ratio +
+                                          np.random.random_sample(data_dict['train_data'].shape)).astype(np.float32)
+        np.random.seed()
     valid_total_size = len(data_dict['valid_data'])
     if valid_total_size == 0:
       print("Did not load validation set.")
     else:
       print("Found validation set with number examples: ", valid_total_size)
-
+      if hps.cv_keep_ratio < 1.:
+        np.random.seed(int(hps.cv_rand_seed))
+        data_dict['valid_data_cvmask'] = np.floor(hps.cv_keep_ratio +
+                                          np.random.random_sample(data_dict['valid_data'].shape)).astype(np.float32)
+        np.random.seed()
+    datasets[k] = clean_data_dict(data_dict)
   return datasets
 
 
@@ -148,7 +155,8 @@ def clean_data_dict(data_dict):
   """
 
   keys = ['train_truth', 'train_ext_input', 'valid_data',
-          'valid_truth', 'valid_ext_input', 'valid_train']
+          'valid_truth', 'valid_ext_input', 'valid_train',
+          'train_data_cvmask', 'valid_data_cvmask']
   for k in keys:
     if k not in data_dict:
       data_dict[k] = None
