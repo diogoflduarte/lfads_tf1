@@ -1,3 +1,4 @@
+from __future__ import print_function
 import tensorflow as tf
 import numpy as np
 import sys
@@ -15,7 +16,7 @@ from helper_funcs import DiagonalGaussianFromInput, DiagonalGaussian, DiagonalGa
 from helper_funcs import BidirectionalDynamicRNN, DynamicRNN, LinearTimeVarying
 from helper_funcs import KLCost_GaussianGaussian, Poisson
 from helper_funcs import write_data
-from helper_funcs import printer
+from helper_funcs import printer, mkdir_p
 #from plot_funcs import plot_data, close_all_plots
 #from data_funcs import read_datasets
 from customcells import ComplexCell
@@ -35,6 +36,32 @@ def _case_with_no_default(pairs):
             return tf.identity(pairs[0][1]())
     return tf.case(pairs, _default_value_fn, exclusive=True)
 
+#class Logger(object):
+#    def __init__(self, log_file):
+#        self.terminal = sys.stdout
+#        self.log = open(log_file, "a")#
+#
+#    def write(self, message):
+#        self.terminal.write(message)
+#        self.log.write(message)  
+#
+#    def flush(self):
+#        #this flush method is needed for python 3 compatibility.
+#        #this handles the flush command by doing nothing.
+#        #you might want to specify some extra behavior here.
+#        pass    
+
+class Logger(object):
+    def __init__(self, log_file):
+        self.logfile = log_file
+        if not os.path.exists(log_file):
+            open(log_file, 'w').close()
+    def printlog(self, *args):
+        strtext = (('{} ' * len(args)).format(*args))[:-1]
+        #self.logfile.write(strtext)
+        with open(self.logfile, 'a') as f:
+            print(strtext, file=f)
+            print(strtext)
 
 class LFADS(object):
 
@@ -45,7 +72,13 @@ class LFADS(object):
             mask_h = 1. - mask
             return tf.stop_gradient(mask_h * target) + mask * target
 
-    # build the graph
+        # save the stdout to a log file and prints it on the screen
+	mkdir_p(hps['lfads_save_dir'])
+        #sys.stdout = Logger(os.path.join(hps['lfads_save_dir'], "lfads_output.log"))
+        logger = Logger(os.path.join(hps['lfads_save_dir'], "lfads_output.log"))
+        self.printlog = logger.printlog
+
+    	# build the graph
         # set the learning rate, defaults to the hyperparam setting
         self.learning_rate = tf.Variable(float(hps['learning_rate_init']), trainable=False, name="learning_rate")
 
@@ -60,7 +93,7 @@ class LFADS(object):
         #  - this sets a common dimension across datasets, allowing datasets to have different sizes
         #  if not multiple datasets and no input_factors_dim is defined, we'll hook data straight to encoders
 
-       # define all placeholders
+        # define all placeholders
         with tf.variable_scope('placeholders'):
             # input data (what are we training on)
             # we're going to try setting input dimensionality to None
@@ -822,8 +855,13 @@ class LFADS(object):
             ext_input_bxtxi = data_dict[ext_input_kind]
 
             this_batch = data_extxd[example_idxs,:,:]
+<<<<<<< HEAD
             this_batch_cvmask = cv_rand_mask[example_idxs,:,:] if cv_rand_mask else None
             ext_input_batch = ext_input_bxtxi[example_idxs, :, :] if ext_input_bxtxi else None
+=======
+
+            ext_input_batch = ext_input_bxtxi[example_idxs, :, :] if ext_input_bxtxi is not None else None
+>>>>>>> 081865c57443a2329cab79d95bfcd984943509a6
 
             feed_dict = self.build_feed_dict(name, this_batch,
                                              cv_rand_mask=this_batch_cvmask,
@@ -914,7 +952,7 @@ class LFADS(object):
                              kl_co_weight=hps['kl_co_weight'])
         kl_weight = hps['kl_ic_weight']
         train_step = session.run(self.train_step)
-        print("Epoch:%d, step:%d (TRAIN, VALID): total: %.2f, %.2f\
+        self.printlog("Epoch:%d, step:%d (TRAIN, VALID): total: %.2f, %.2f\
         recon: %.2f, %.2f, %.2f,    kl: %.2f, %.2f, kl weight: %.2f" % \
               (-1, train_step, 0, val_total_cost,
                0, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, 0, val_kl_cost,
@@ -932,15 +970,15 @@ class LFADS(object):
 
         while True:
             new_lr = self.get_learning_rate()
-            #print('Starting learning rate: ', new_lr)
+            #self.printlog('Starting learning rate: ', new_lr)
             # should we stop?
             if target_num_epochs is None:
                 if new_lr < hps['learning_rate_stop']:
-                    print("Learning rate criteria met")
+                    self.printlog("Learning rate criteria met")
                     break
             else:
                 if nepoch == target_num_epochs:  # nepoch starts at 0
-                    print("Num epoch criteria met. "
+                    self.printlog("Num epoch criteria met. "
                           "Completed {} epochs.".format(nepoch))
                     break
 
@@ -956,7 +994,7 @@ class LFADS(object):
                                  kl_ic_weight = hps['kl_ic_weight'],
                                  kl_co_weight = hps['kl_co_weight'])
             epoch_time = time.time() - start_time
-            print("Elapsed time: %f" %epoch_time)
+            self.printlog("Elapsed time: %f" %epoch_time)
 
             val_total_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, val_kl_cost = \
                 self.valid_epoch(datasets,
@@ -964,7 +1002,7 @@ class LFADS(object):
                                  kl_co_weight = hps['kl_co_weight'])
 
             if np.isnan(tr_total_cost) or np.isnan(val_total_cost):
-                print('Nan found in training or validation cost evaluation. Training stopped!')
+                self.printlog('Nan found in training or validation cost evaluation. Training stopped!')
                 break
 
             # Evaluate the model with posterior mean sampling
@@ -1028,7 +1066,7 @@ class LFADS(object):
 
             kl_weight = hps['kl_ic_weight']
             train_step = session.run(self.train_step)
-            print("Epoch:%d, step:%d (TRAIN, VALID_SAMP, VALID_TRIAL): total: %.4f, %.4f,\
+            self.printlog("Epoch:%d, step:%d (TRAIN, VALID_SAMP, VALID_TRIAL): total: %.4f, %.4f,\
             recon: %.4f, %.4f, %.4f, R^2 (T/V: Held-in, Held-out), %.3f, %.3f, %.3f, %.3f, kl: %.4f, %.4f, kl weight: %.4f" % \
                   (nepoch, train_step, tr_total_cost, val_total_cost,
                    train_set_heldin_samp_cost, train_set_heldout_samp_cost, valid_set_heldin_samp_cost,
@@ -1099,13 +1137,13 @@ class LFADS(object):
             # MRK, change the LR decay based on valid cost (previously was based on train cost)
             valid_cost_to_use = val_total_cost
             if len(valid_costs) > n_lr and valid_cost_to_use > np.max(valid_costs[-n_lr:]):
-                print("Decreasing learning rate")
+                self.printlog("Decreasing learning rate")
                 self.run_learning_rate_decay_opt()
 
             # early stopping when no improvement of validation cost for 3*n_lr
             #if len(valid_costs) > n_lr*3 and valid_cost_to_use > np.max(valid_costs[-n_lr*3:]):
             if nepoch - lve_epoch > 3*n_lr:
-                print("No improvement of the validation cost! Stopping the training!")
+                self.printlog("No improvement of the validation cost! Stopping the training!")
                 break
 
             valid_costs.append(valid_cost_to_use)
@@ -1190,7 +1228,7 @@ class LFADS(object):
         E, T, D  = data_extxd.shape
         E_to_process = hps.ps_nexamples_to_process
         if E_to_process > E:
-          print("Setting number of posterior samples to process to : %d" % E)
+          self.printlog("Setting number of posterior samples to process to : %d" % E)
           E_to_process = E
 
         # make a bunch of placeholders to store the posterior sample means
@@ -1218,7 +1256,7 @@ class LFADS(object):
         data_bxtxd = data_extxd[0:E_to_process]
         for rep in range(pm_batch_size):
             printer("Running repetitions %d of %d." % (rep + 1, pm_batch_size))
-            #print("Running %d of %d." % (es_idx+1, E_to_process))
+            #self.printlog("Running %d of %d." % (es_idx+1, E_to_process))
             #example_idxs = es_idx * np.ones(batch_size, dtype=np.int32)
             # run the model
             mv = self.eval_model_runs_batch(data_name, data_bxtxd, ext_input_bxtxi,
@@ -1270,7 +1308,7 @@ class LFADS(object):
                 if self.hps.co_dim > 0:
                     controller_outputs = controller_outputs + model_values['controller_outputs']
 
-        print("")
+        self.printlog("")
         model_runs = {}
         model_runs['gen_ics'] = gen_ics
         model_runs['gen_states'] = gen_states
@@ -1342,12 +1380,12 @@ class LFADS(object):
             else:
               fname = output_fname + data_name + '_' + data_kind + '_' + kind
 
-            print("Writing data for %s data and kind %s to file %s." % (data_name, data_kind, fname))
+            self.printlog("Writing data for %s data and kind %s to file %s." % (data_name, data_kind, fname))
             model_runs = self.eval_model_runs_avg_epoch(data_name, data_extxd, ext_input_bxtxi)
             all_model_runs.append(model_runs)
             full_fname = os.path.join(hps.lfads_save_dir, fname)
             write_data(full_fname, model_runs, compression='gzip')
-            print("Done.")
+            self.printlog("Done.")
 
         return all_model_runs
 
