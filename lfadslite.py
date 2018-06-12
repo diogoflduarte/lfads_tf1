@@ -718,10 +718,14 @@ class LFADS(object):
         # this is the optimizer
         opt = tf.train.AdamOptimizer(learning_rate, beta1=0.9, beta2=0.999,
                                           epsilon=1e-01)
+        hps['use_tpu'] = False
+        if hps['use_tpu']:
+            opt = tf.contrib.tpu.CrossShardOptimizer(opt)
 
         global_step = tf.train.get_global_step()
         train_op = opt.apply_gradients(
             zip(gradients, trainable_vars), global_step=global_step)
+        #train_op = opt.minimize(total_cost, global_step)
 
         # print Costs
         # total_cost = tf.self.printlog(total_cost, [tf.train.get_global_step(), total_cost, rec_cost_train])
