@@ -988,6 +988,8 @@ class LFADS(object):
 
             if np.isnan(tr_total_cost) or np.isnan(val_total_cost):
                 self.printlog('Nan found in training or validation cost evaluation. Training stopped!')
+                self.trial_recon_cost = np.nan
+                self.samp_recon_cost = np.nan
                 break
 
             # Evaluate the model with posterior mean sampling
