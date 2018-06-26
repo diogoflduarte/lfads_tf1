@@ -846,6 +846,7 @@ class LFADS(object):
             this_batch = data_extxd[example_idxs,:,:]
 
             this_batch_cvmask = cv_rand_mask[example_idxs,:,:] if cv_rand_mask is not None else None
+
             ext_input_batch = ext_input_bxtxi[example_idxs, :, :] if ext_input_bxtxi is not None else None
 
             feed_dict = self.build_feed_dict(name, this_batch,
@@ -1167,7 +1168,8 @@ class LFADS(object):
         else:
             run_type = kind_dict('posterior_sample_and_average')
 
-        feed_dict = self.build_feed_dict(data_name, data_bxtxd, ext_input_bxtxi=ext_input_bxtxi, run_type=run_type,
+        feed_dict = self.build_feed_dict(data_name, data_bxtxd, cv_rand_mask=np.ones_like(data_bxtxd),
+        	ext_input_bxtxi=ext_input_bxtxi, run_type=run_type,
                                          keep_prob=1.0, keep_ratio=1.0)
         # Non-temporal signals will be batch x dim.
         # Temporal signals are list length T with elements batch x dim.
