@@ -952,7 +952,7 @@ class LFADS(object):
         self.trial_recon_cost = valid_set_heldin_samp_cost
         self.samp_recon_cost = valid_set_heldout_samp_cost
 
-        coef = 0.8 # smoothing coefficient - lower values mean more smoothing
+        coef = 1.0 # smoothing coefficient - lower values mean more smoothing
 
         # calculate R^2 if true data is available
         do_r2_calc = data_dict['train_truth'] is not None
@@ -998,7 +998,8 @@ class LFADS(object):
 
             # Evaluate the model with posterior mean sampling
             #'''
-            if do_r2_calc:
+            # every 10 epochs
+            if do_r2_calc and (nepoch % 10 == 0):
                 all_valid_R2_heldin = []
                 all_valid_R2_heldout = []
                 all_train_R2_heldin = []
@@ -1127,11 +1128,11 @@ class LFADS(object):
 
             # should we decrement learning rate?
             # MRK, for PBT we can set n_lr to np.inf
-            n_lr = hps['learning_rate_n_to_compare']
+            n_lr = int(hps['learning_rate_n_to_compare'])
 
             # MRK, change the LR decay based on valid cost (previously was based on train cost)
             valid_cost_to_use = val_total_cost
-            if len(valid_costs) > n_lr and valid_cost_to_use > np.max(valid_costs[-n_lr:]):
+            if len(valid_costs) > n_lr and (valid_cost_to_use > max(valid_costs[-n_lr:])):
                 self.printlog("Decreasing learning rate")
                 self.run_learning_rate_decay_opt()
 
@@ -1330,22 +1331,12 @@ class LFADS(object):
         est_flat = data_est.flatten()
         if mask is not None:
             mask = mask.flatten()
-            #plt.plot(true_flat)
-            #plt.plot(est_flat)
-            #plt.show()
-
-
-            #mask = np.repeat(np.expand_dims(mask, axis=0), data_true.shape[0], axis=0)
-            #mask = mask.flatten()
             mask = mask.astype(np.bool)
-
             R2_heldin = np.corrcoef(true_flat[mask], est_flat[mask])**2.0
             R2_heldout = np.corrcoef(true_flat[np.invert(mask)], est_flat[np.invert(mask)])**2.0
-            print(R2_heldin)
             return R2_heldin[0,1], R2_heldout[0,1]
         else:
             R2_heldin = np.corrcoef(true_flat, est_flat) ** 2.0
-            print(R2_heldin)
             return R2_heldin[0, 1], np.nan
 
     # this calls self.eval_model_runs_avg_epoch to get the posterior means
