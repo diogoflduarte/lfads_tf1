@@ -304,11 +304,19 @@ class DiagonalGaussian(Gaussian):
     """Diagonal Gaussian with different constant mean and variances in each
     dimension.
     """
-
+    # MRK todo, Fix for co_dim > 0 (now it works only for co_dim=0)
+    
     def __init__(self, z_size, name, var):
-        self.mean_bxn = tf.zeros(z_size)
+        # MRK's fix, letting the mean of the prior to be trainable
+        mean_init = 0.0
+        z_mean_1xn = tf.get_variable(name=name+"/mean", shape=[1, z_size[1]],
+                                 initializer=tf.constant_initializer(mean_init))
+        self.mean_bxn =  tf.tile(z_mean_1xn, tf.stack([z_size[0], 1]))
+        self.mean_bxn.set_shape([None, z_size[1]])
+        #
         self.logvar_bxn = tf.log(tf.zeros(z_size) + var)
         self.noise_bxn = tf.random_normal(tf.shape(self.logvar_bxn))
+ 
 
 
 class DiagonalGaussianFromInput(Gaussian):

@@ -243,8 +243,8 @@ class LFADS(object):
         this_dataset_out_fac_b = _case_with_no_default( pf_pairs_out_fac_bs )
         this_dataset_dims = _case_with_no_default( pf_pairs_this_dataset_dims )
                 
-
-        
+        # apply dropout to the data
+        self.dataset_ph = tf.nn.dropout(self.dataset_ph, hps.keep_prob)
         # batch_size - read from the data placeholder
         graph_batch_size = tf.shape(self.dataset_ph)[0]
         # can we infer the data dimensionality for the random mask?
@@ -323,7 +323,7 @@ class LFADS(object):
         # if not, skip all these graph elements like so:
         if hps['co_dim'] == 0:
             with tf.variable_scope('generator'):
-                gen_cell = CustomGRUCell(num_units = hps['ic_enc_dim'],
+                gen_cell = CustomGRUCell(num_units = hps['gen_dim'],
                                          batch_size = graph_batch_size,
                                          clip_value = hps['cell_clip_value'],
                                          recurrent_collections=['l2_gen'])
@@ -1132,15 +1132,15 @@ class LFADS(object):
 
             # MRK, change the LR decay based on valid cost (previously was based on train cost)
             valid_cost_to_use = val_total_cost
-            if len(valid_costs) > n_lr and (valid_cost_to_use > max(valid_costs[-n_lr:])):
+            if n_lr > 0 and len(valid_costs) > n_lr and (valid_cost_to_use > max(valid_costs[-n_lr:])):
                 self.printlog("Decreasing learning rate")
                 self.run_learning_rate_decay_opt()
 
             # early stopping when no improvement of validation cost for 3*n_lr
             #if len(valid_costs) > n_lr*3 and valid_cost_to_use > np.max(valid_costs[-n_lr*3:]):
-            if nepoch - lve_epoch > 3*n_lr:
-                self.printlog("No improvement of the validation cost! Stopping the training!")
-                break
+            #if n_lr > 0 and nepoch - lve_epoch > 3*n_lr:
+            #    self.printlog("No improvement of the validation cost! Stopping the training!")
+            #    break
 
             valid_costs.append(valid_cost_to_use)
 
