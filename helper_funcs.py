@@ -393,7 +393,8 @@ class BidirectionalDynamicRNN(object):
             else:
                 self.init_fw = self.init_h_fw_tiled
                 self.init_bw = self.init_h_bw_tiled
-        else:  # if initial state is None
+        # end if initial state is None
+        else: # use the initial state that was passed in.
             self.init_fw, self.init_bw = initial_state
 
         # pick your cell
@@ -410,25 +411,19 @@ class BidirectionalDynamicRNN(object):
             self.cell = tf.contrib.rnn.DropoutWrapper(
                 self.cell, output_keep_prob=output_keep_prob)
 
-        # unused
-        # convenient way to take a low-D output from network
-        if output_size is not None:
-            self.cell = tf.contrib.rnn.OutputProjectionWrapper(self.cell, output_size=output_size)
+        # try setting initial states to 0
+        self.init_fw2 = tf.zeros_like( self.init_fw );
+        self.init_bw2 = tf.zeros_like( self.init_bw );
 
-        # for some reason I can't get dynamic_rnn to work without inputs
-        #  so generate fake inputs if needed...
-        if inputs is None:
-            inputs = tf.zeros([batch_size, sequence_lengths, 1],
-                              dtype=tf.float32)
-        #inputs.set_shape((None, sequence_lengths, inputs.get_shape()[2]))
+        # call bidirectional dynamic rnn
         self.states, self.last = tf.nn.bidirectional_dynamic_rnn(
             cell_fw=self.cell,
             cell_bw=self.cell,
             dtype=tf.float32,
-            # sequence_length = sequence_lengths,
+            sequence_length = sequence_lengths,
             inputs=inputs,
-            initial_state_fw=self.init_fw,
-            initial_state_bw=self.init_bw,
+            initial_state_fw=self.init_fw2,
+            initial_state_bw=self.init_bw2,
         )
 
         # concatenate the outputs of the encoders (h only) into one vector
@@ -489,27 +484,11 @@ class DynamicRNN(object):
             self.cell = tf.contrib.rnn.DropoutWrapper(
                 self.cell, output_keep_prob=output_keep_prob)
 
-        # unused
-        # convenient way to take a low-D output from network
-        if output_size is not None:
-            self.cell = tf.contrib.rnn.OutputProjectionWrapper(self.cell, output_size=output_size)
-
-        # unused
-        # convenient way to take another output from network
-        if output_size2 is not None:
-            self.cell = tf.contrib.rnn.OutputProjectionWrapper(self.cell, output_size=output_size2)
-
-        # for some reason I can't get dynamic_rnn to work without inputs
-        #  so generate fake inputs if needed...
-        if inputs is None:
-            inputs = tf.zeros([batch_size, sequence_lengths, 1],
-                              dtype=tf.float32)
         # call dynamic_rnn
-        #inputs.set_shape((None, sequence_lengths, inputs.get_shape()[2]))
         self.states, self.last = tf.nn.dynamic_rnn(
             cell=self.cell,
             dtype=tf.float32,
-            # sequence_length = sequence_lengths,
+            sequence_length = sequence_lengths,
             inputs=inputs,
             initial_state=self.init,
         )
