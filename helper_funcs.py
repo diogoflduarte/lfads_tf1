@@ -406,8 +406,7 @@ class BidirectionalDynamicRNN(object):
             self.cell = cell
 
         # add dropout if requested
-        if output_keep_prob != 1.0:
-            self.cell = tf.contrib.rnn.DropoutWrapper(
+        self.cell = tf.contrib.rnn.DropoutWrapper(
                 self.cell, output_keep_prob=output_keep_prob)
 
         # unused
@@ -485,8 +484,7 @@ class DynamicRNN(object):
             self.cell = cell
 
         # add dropout if requested
-        if output_keep_prob != 1.0:
-            self.cell = tf.contrib.rnn.DropoutWrapper(
+        self.cell = tf.contrib.rnn.DropoutWrapper(
                 self.cell, output_keep_prob=output_keep_prob)
 
         # unused

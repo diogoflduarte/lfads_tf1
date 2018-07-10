@@ -105,7 +105,7 @@ class LFADS(object):
             self.keep_prob = tf.placeholder(tf.float32, name='keep_prob')
             self.keep_ratio = tf.placeholder(tf.float32, name='keep_ratio')
 
-            self.run_type = tf.placeholder(tf.int16, name='run_type')
+            self.run_type = tf.placeholder(tf.int32, name='run_type')
             self.kl_ic_weight = tf.placeholder(tf.float32, name='kl_ic_weight')
             self.kl_co_weight = tf.placeholder(tf.float32, name='kl_co_weight')
             # name of the dataset
@@ -118,7 +118,7 @@ class LFADS(object):
                 self.ext_input = None
 
         if hps['ext_input_dim'] > 0:
-            self.ext_input = tf.nn.dropout(self.ext_input, hps.keep_prob)
+            self.ext_input = tf.nn.dropout(self.ext_input, self.keep_prob)
         else:
             self.ext_input = None
 
@@ -244,7 +244,7 @@ class LFADS(object):
         this_dataset_dims = _case_with_no_default( pf_pairs_this_dataset_dims )
                 
         # apply dropout to the data
-        self.dataset_ph = tf.nn.dropout(self.dataset_ph, hps.keep_prob)
+        self.dataset_ph = tf.nn.dropout(self.dataset_ph, self.keep_prob)
         # batch_size - read from the data placeholder
         graph_batch_size = tf.shape(self.dataset_ph)[0]
         # can we infer the data dimensionality for the random mask?
@@ -295,7 +295,7 @@ class LFADS(object):
                 cell = ic_enc_cell,
                 inputs = self.input_to_encoders,
                 initial_state = None,
-                rnn_type = 'customgru',
+                rnn_type = 'gru',
                 output_keep_prob = self.keep_prob)
             #    inputs = masked_dataset_ph,
 
@@ -309,11 +309,11 @@ class LFADS(object):
             self.posterior_zs_g0 = self.gen_ics_posterior
 
         # to go forward, either sample from the posterior, or take mean
-        #     (depending on current usage)
-        if self.run_type in [kind_dict("train"), kind_dict("posterior_sample_and_average")]:
-            self.gen_ics_lowd = self.gen_ics_posterior.sample()
-        else:
-            self.gen_ics_lowd = self.gen_ics_posterior.mean
+        do_posterior_sample = tf.logical_or(tf.equal(self.run_type, tf.constant(kind_dict("train"))),
+            tf.equal(self.run_type, tf.constant(kind_dict("posterior_sample_and_average"))))
+        self.gen_ics_lowd = tf.cond(do_posterior_sample, lambda:self.gen_ics_posterior.sample(), 
+            lambda:self.gen_ics_posterior.mean)
+
         with tf.variable_scope('generator'):
             self.gen_ics = linear(self.gen_ics_lowd, hps['gen_dim'], name='ics_2_g0')
 
@@ -338,7 +338,7 @@ class LFADS(object):
                                               cell = gen_cell,
                                               inputs = gen_input,
                                               initial_state = self.gen_ics,
-                                              rnn_type = 'customgru',
+                                              rnn_type = 'gru',
                                               output_keep_prob = self.keep_prob)
                 self.gen_states = self.gen_rnn_obj.states
 
@@ -368,7 +368,7 @@ class LFADS(object):
                     cell = ci_enc_cell,
                     inputs = self.input_to_encoders,
                     initial_state = None,
-                    rnn_type = 'customgru',
+                    rnn_type = 'gru',
                     output_keep_prob = self.keep_prob)
                 #    inputs = masked_dataset_ph,
 

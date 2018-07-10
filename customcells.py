@@ -220,10 +220,16 @@ class ComplexCell(tf.nn.rnn_cell.RNNCell):
                     co_mean_new_h, co_logvar_new_h)
                 
                 # normally sample, but sometimes use the mean
-                if self._kind in [kind_dict("train"), kind_dict("posterior_sample_and_average")]:
-                    co_out = cos_posterior.sample()
-                else:
-                    co_out = cos_posterior.mean
+                # TODO, MRK, to fix later
+
+                do_posterior_sample = tf.logical_or(tf.equal(self._kind, tf.constant(kind_dict("train"))),
+                            tf.equal(self._kind, tf.constant(kind_dict("posterior_sample_and_average"))))
+                co_out = tf.cond(do_posterior_sample, lambda:cos_posterior.sample(), lambda:cos_posterior.mean)
+
+                #if self._kind in [kind_dict("train"), kind_dict("posterior_sample_and_average")]:
+                #    co_out = cos_posterior.sample()
+                #else:
+                #    co_out = cos_posterior.mean
 
             # generator's inputs
 
