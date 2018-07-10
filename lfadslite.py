@@ -285,6 +285,7 @@ class LFADS(object):
                                         batch_size = graph_batch_size,
                                         clip_value = hps['cell_clip_value'],
                                         recurrent_collections=['l2_ic_enc'])
+            #seq_len.set_shape([1, graph_batch_size])
             ## ic_encoder
             self.ic_enc_rnn_obj = BidirectionalDynamicRNN(
                 state_dim = hps['ic_enc_dim'],
@@ -296,6 +297,7 @@ class LFADS(object):
                 initial_state = None,
                 rnn_type = 'customgru',
                 output_keep_prob = self.keep_prob)
+            #    inputs = masked_dataset_ph,
 
             # map the ic_encoder onto the actual ic layer
             self.gen_ics_posterior = DiagonalGaussianFromInput(
@@ -368,6 +370,7 @@ class LFADS(object):
                     initial_state = None,
                     rnn_type = 'customgru',
                     output_keep_prob = self.keep_prob)
+                #    inputs = masked_dataset_ph,
 
                 if not hps['do_causal_controller']:
                     self.ci_enc_rnn_states = self.ci_enc_rnn_obj.states
