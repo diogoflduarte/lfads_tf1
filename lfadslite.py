@@ -790,7 +790,8 @@ class LFADS(object):
     #    (it is mostly a wrapper around "run_epoch")
     # afterwards it saves a checkpoint if requested
         collected_op_values = self.run_epoch(datasets, kl_ic_weight,
-                                             kl_co_weight, "train")
+                                             kl_co_weight, dataset_type="train",
+                                             run_type = "train")
 
         if do_save_ckpt:
           session = tf.get_default_session()
@@ -801,32 +802,37 @@ class LFADS(object):
 
         return collected_op_values
 
-    def valid_epoch(self, datasets, kl_ic_weight, kl_co_weight):
-    # valid_epoch runs the entire validation set
+    def do_validation(self, datasets, kl_ic_weight, kl_co_weight, dataset_type):
+    # do_validation performs an evaluation of the reconstruction cost
+    #    can do this on either train or valid datasets
     #    (it is mostly a wrapper around "run_epoch")
         collected_op_values = self.run_epoch(datasets, kl_ic_weight,
-                                             kl_co_weight, "valid")
+                                             kl_co_weight,  dataset_type=dataset_type,
+                                             run_type = "valid")
         return collected_op_values
 
-    def run_epoch(self, datasets, kl_ic_weight, kl_co_weight, train_or_valid = "train"):
+    def run_epoch(self, datasets, kl_ic_weight, kl_co_weight, dataset_type = "train", run_type="train"):
         ops_to_eval = [self.total_cost, self.rec_cost_train, self.rec_cost_valid,
                        self.kl_cost]
         # get a full list of all data for this type (train/valid)
         all_name_example_idx_pairs = \
-          self.shuffle_and_flatten_datasets(datasets, train_or_valid)
+          self.shuffle_and_flatten_datasets(datasets, dataset_type)
         
-        if train_or_valid == "train":
-            ops_to_eval.append(self.train_op)
+        if dataset_type == "train":
             kind_data = "train_data"
             cv_mask_name = "train_data_cvmask"
             ext_input_kind = "train_ext_input"
-            keep_prob = self.hps.keep_prob
-            keep_ratio = self.hps.keep_ratio
 
         else:
             kind_data = "valid_data"
             cv_mask_name = "valid_data_cvmask"
             ext_input_kind = "valid_ext_input"
+
+        if run_type == "train":
+            ops_to_eval.append(self.train_op)
+            keep_prob = self.hps.keep_prob
+            keep_ratio = self.hps.keep_ratio
+        else:
             keep_prob = 1.0
             keep_ratio = 1.0
             
@@ -930,9 +936,10 @@ class LFADS(object):
 
         # print validation costs before the first training step
         val_total_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, val_kl_cost = \
-            self.valid_epoch(datasets,
+            self.do_validation(datasets,
                              kl_ic_weight=hps['kl_ic_weight'],
-                             kl_co_weight=hps['kl_co_weight'])
+                             kl_co_weight=hps['kl_co_weight'],
+                             dataset_type="train")
         kl_weight = hps['kl_ic_weight']
         train_step = session.run(self.train_step)
         self.printlog("Epoch:%d, step:%d (TRAIN, VALID): total: %.2f, %.2f\
@@ -975,17 +982,26 @@ class LFADS(object):
 
             start_time = time.time()
             
-            tr_total_cost, train_set_heldin_samp_cost, train_set_heldout_samp_cost, tr_kl_cost = \
-                self.train_epoch(datasets, do_save_ckpt=do_save_ckpt,
+            # CP/MRK: we no longer use these step-specific outputs
+            #tr_total_cost, train_set_heldin_samp_cost, train_set_heldout_samp_cost, tr_kl_cost = \
+            self.train_epoch(datasets, do_save_ckpt=do_save_ckpt,
                                  kl_ic_weight = hps['kl_ic_weight'],
                                  kl_co_weight = hps['kl_co_weight'])
-            epoch_time = time.time() - start_time
-            self.printlog("Elapsed time: %f" %epoch_time)
+            
+            tr_total_cost, train_set_heldin_samp_cost, train_set_heldout_samp_cost, tr_kl_cost = \
+                self.do_validation(datasets,
+                                 kl_ic_weight = hps['kl_ic_weight'],
+                                 kl_co_weight = hps['kl_co_weight'],
+                                 dataset_type="train")
 
             val_total_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, val_kl_cost = \
-                self.valid_epoch(datasets,
+                self.do_validation(datasets,
                                  kl_ic_weight = hps['kl_ic_weight'],
-                                 kl_co_weight = hps['kl_co_weight'])
+                                 kl_co_weight = hps['kl_co_weight'],
+                                 dataset_type="valid")
+
+            epoch_time = time.time() - start_time
+            self.printlog("Elapsed time: %f" %epoch_time)
 
             if np.isnan(tr_total_cost) or np.isnan(val_total_cost):
                 self.printlog('Nan found in training or validation cost evaluation. Training stopped!')
@@ -1128,7 +1144,12 @@ class LFADS(object):
             n_lr = int(hps['learning_rate_n_to_compare'])
 
             # MRK, change the LR decay based on valid cost (previously was based on train cost)
-            valid_cost_to_use = val_total_cost
+            #valid_cost_to_use = val_total_cost
+            # use training cost for learning rate annealing
+            valid_cost_to_use = tr_total_cost
+            #if n_lr > 0 and len(valid_costs) > n_lr and (valid_cost_to_use > max(valid_costs[-n_lr:])):
+            #    self.printlog("Decreasing learning rate")
+            #    self.run_learning_rate_decay_opt()
             if n_lr > 0 and len(valid_costs) > n_lr and (valid_cost_to_use > max(valid_costs[-n_lr:])):
                 self.printlog("Decreasing learning rate")
                 self.run_learning_rate_decay_opt()
@@ -1140,6 +1161,7 @@ class LFADS(object):
             #    break
 
             valid_costs.append(valid_cost_to_use)
+            #train_costs.append(tr_total_cost)
 
             nepoch += 1
 
