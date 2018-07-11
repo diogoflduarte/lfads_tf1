@@ -88,7 +88,7 @@ def write_data(data_fname, data_dict, use_json=False, compression=None):
             raise
 
 
-def init_linear_transform(in_size, out_size, name=None, collections=None, mat_init_value=None, bias_init_value=None, normalized=False):
+def init_linear_transform(in_size, out_size, name=None, collections=None, mat_init_value=None, bias_init_value=None, normalized=False, do_bias=True):
     # generic function (we use linear transforms in a lot of places)
     # initialize the weights of the linear transformation based on the size of the inputs
 
@@ -104,13 +104,18 @@ def init_linear_transform(in_size, out_size, name=None, collections=None, mat_in
     w = tf.get_variable(wname, [in_size, out_size], initializer=mat_init,
                         dtype=tf.float32, collections=w_collections)
     if normalized:
-        w = tf.nn.l2_normalize(w, dim=0)
+        w = tf.nn.l2_normalize(w, axis=0)
 
     # biases
     bname = (name + "/b") if name else "/b"
-    b = tf.get_variable(bname, [1, out_size],
-                        initializer=tf.zeros_initializer(),
-                        dtype=tf.float32)
+    if do_bias:
+        b = tf.get_variable(bname, [1, out_size],
+                            initializer=tf.zeros_initializer(),
+                            dtype=tf.float32)
+    else:
+        b =  tf.zeros([1, out_size],
+                      name = bname,
+                      dtype=tf.float32)
     return (w, b)
 
 
@@ -515,7 +520,7 @@ class LinearTimeVarying(object):
     # self.output_nl = nonlinear transform
 
     def __init__(self, inputs, output_size, transform_name, output_name, nonlinearity=None,
-                 collections=None, W=None, b=None, normalized=False):
+                 collections=None, W=None, b=None, normalized=False, do_bias=True):
         num_timesteps = tf.shape(inputs)[1]
         # must return "as_list" to get ints
         input_size = inputs.get_shape().as_list()[2]
@@ -529,7 +534,8 @@ class LinearTimeVarying(object):
 
         if W is None and b is None:
             W, b = init_linear_transform(input_size, output_size, name=transform_name,
-                                         collections=collections, normalized=normalized)
+                                         collections=collections, normalized=normalized,
+                                         do_bias=do_bias)
         self.W = W
         self.b = b
 

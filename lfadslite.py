@@ -352,10 +352,11 @@ class LFADS(object):
                 gen_states_dropped = tf.nn.dropout(self.gen_rnn_obj.states, self.keep_prob)
                 ## factors
                 self.fac_obj = LinearTimeVarying(inputs = gen_states_dropped,
-                                                    output_size = hps['factors_dim'],
-                                                    transform_name = 'gen_2_factors',
-                                                    output_name = 'factors_concat',
-                                                    collections='l2_gen_2_factors',
+                                                 output_size = hps['factors_dim'],
+                                                 transform_name = 'gen_2_factors',
+                                                 output_name = 'factors_concat',
+                                                 collections='l2_gen_2_factors',
+                                                 do_bias = False,
                                                  normalized=True
                                                  )
                 self.factors = self.fac_obj.output
@@ -558,7 +559,8 @@ class LFADS(object):
         # block gradients for coordinated dropout and cross-validation
         if hps.output_dist.lower() == 'poisson':
             masked_logrates = entry_stop_gradients(self.logrates, grad_binary_mask)
-            self.loglikelihood_b_t = Poisson(masked_logrates).logp(self.dataset_ph)
+            #self.loglikelihood_b_t = Poisson(masked_logrates).logp(self.dataset_ph)
+            self.loglikelihood_b_t = -tf.nn.log_poisson_loss( self.dataset_ph, masked_logrates, compute_full_loss=True )
         elif hps.output_dist.lower() == 'gaussian':
             masked_output_mean = entry_stop_gradients(self.output_mean, grad_binary_mask)
             masked_output_logvar = entry_stop_gradients(self.output_logvar, grad_binary_mask)
@@ -1084,8 +1086,7 @@ class LFADS(object):
 
             kl_weight = hps['kl_ic_weight']
             train_step = session.run(self.train_step)
-            self.printlog("Epoch:%d, step:%d (TRAIN, VALID_SAMP, VALID_TRIAL): total: %.4f, %.4f,\
-            recon: %.4f, %.4f, %.4f, R^2 (T/V: Held-in, Held-out), %.3f, %.3f, %.3f, %.3f, kl: %.4f, %.4f, kl weight: %.4f" % \
+            self.printlog("Epoch:%d, step:%d (TRA,VAL_SAMP,VAL_TRI): tot:%.4f,%.4f, rec:%.4f,%.4f,%.4f, R^2(T/V:Held-in,Held-out),%.3f,%.3f,%.3f,%.3f, kl:%.4f,%.4f, kl weight:%.4f" % \
                   (nepoch, train_step, tr_total_cost, val_total_cost,
                    train_set_heldin_samp_cost, train_set_heldout_samp_cost, valid_set_heldin_samp_cost,
                    all_train_R2_heldin, all_train_R2_heldout, all_valid_R2_heldin, all_valid_R2_heldout,
@@ -1160,8 +1161,10 @@ class LFADS(object):
             #    self.printlog("Decreasing learning rate")
             #    self.run_learning_rate_decay_opt()
             if n_lr > 0 and len(valid_costs) > n_lr and (valid_cost_to_use > max(valid_costs[-n_lr:])):
-                self.printlog("Decreasing learning rate")
                 self.run_learning_rate_decay_opt()
+                lr = session.run( self.learning_rate )
+                self.printlog("Decreasing learning rate to ", lr)
+                valid_costs.append(np.inf)
 
             # early stopping when no improvement of validation cost for 3*n_lr
             #if len(valid_costs) > n_lr*3 and valid_cost_to_use > np.max(valid_costs[-n_lr*3:]):
