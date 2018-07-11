@@ -88,7 +88,7 @@ def write_data(data_fname, data_dict, use_json=False, compression=None):
             raise
 
 
-def init_linear_transform(in_size, out_size, name=None, collections=None, mat_init_value=None, bias_init_value=None):
+def init_linear_transform(in_size, out_size, name=None, collections=None, mat_init_value=None, bias_init_value=None, normalized=False):
     # generic function (we use linear transforms in a lot of places)
     # initialize the weights of the linear transformation based on the size of the inputs
 
@@ -103,6 +103,8 @@ def init_linear_transform(in_size, out_size, name=None, collections=None, mat_in
     wname = (name + "/W") if name else "/W"
     w = tf.get_variable(wname, [in_size, out_size], initializer=mat_init,
                         dtype=tf.float32, collections=w_collections)
+    if normalized:
+        w = tf.nn.l2_normalize(w, dim=0)
 
     # biases
     bname = (name + "/b") if name else "/b"
@@ -388,13 +390,15 @@ class BidirectionalDynamicRNN(object):
             # do tupling if needed
             if rnn_type.lower() == 'lstm':
                 # lstm state is a tuple
-                self.init_fw = tf.contrib.rnn.LSTMStateTuple(self.init_c_fw_tiled, self.init_h_fw_tiled)
-                self.init_bw = tf.contrib.rnn.LSTMStateTuple(self.init_c_bw_tiled, self.init_h_bw_tiled)
+                init_fw = tf.contrib.rnn.LSTMStateTuple(self.init_c_fw_tiled, self.init_h_fw_tiled)
+                init_bw = tf.contrib.rnn.LSTMStateTuple(self.init_c_bw_tiled, self.init_h_bw_tiled)
+                self.init_fw = tf.zeros_like( init_fw )
+                self.init_bw = tf.zeros_like( init_bw )
             else:
-                self.init_fw = self.init_h_fw_tiled
-                self.init_bw = self.init_h_bw_tiled
-                self.init_fw2 = tf.zeros_like( self.init_fw )
-                self.init_bw2 = tf.zeros_like( self.init_bw )
+                #self.init_fw = self.init_h_fw_tiled
+                #self.init_bw = self.init_h_bw_tiled
+                self.init_fw = tf.zeros_like( self.init_h_fw_tiled )
+                self.init_bw = tf.zeros_like( self.init_h_bw_tiled )
                 
         else:  # if initial state is None
             self.init_fw, self.init_bw = initial_state
@@ -426,8 +430,8 @@ class BidirectionalDynamicRNN(object):
             dtype=tf.float32,
             # sequence_length = sequence_lengths,
             inputs=inputs,
-            initial_state_fw=self.init_fw2,
-            initial_state_bw=self.init_bw2,
+            initial_state_fw=self.init_fw,
+            initial_state_bw=self.init_bw,
         )
 
         # concatenate the outputs of the encoders (h only) into one vector
@@ -511,7 +515,7 @@ class LinearTimeVarying(object):
     # self.output_nl = nonlinear transform
 
     def __init__(self, inputs, output_size, transform_name, output_name, nonlinearity=None,
-                 collections=None, W=None, b=None):
+                 collections=None, W=None, b=None, normalized=False):
         num_timesteps = tf.shape(inputs)[1]
         # must return "as_list" to get ints
         input_size = inputs.get_shape().as_list()[2]
@@ -525,7 +529,7 @@ class LinearTimeVarying(object):
 
         if W is None and b is None:
             W, b = init_linear_transform(input_size, output_size, name=transform_name,
-                                         collections=collections)
+                                         collections=collections, normalized=normalized)
         self.W = W
         self.b = b
 

@@ -292,11 +292,11 @@ class LFADS(object):
                 batch_size = graph_batch_size,
                 name = 'ic_enc',
                 sequence_lengths = seq_len,
-                cell = ic_enc_cell,
                 inputs = self.input_to_encoders,
                 initial_state = None,
                 rnn_type = 'gru',
                 output_keep_prob = self.keep_prob)
+            #    cell = ic_enc_cell,
 
             # wrap the last state with a dropout layer
             #ic_enc_laststate_dropped = self.ic_enc_rnn_obj.last_tot
@@ -338,11 +338,12 @@ class LFADS(object):
                                               batch_size = graph_batch_size,
                                               name = 'gen',
                                               sequence_lengths = seq_len,
-                                              cell = gen_cell,
                                               inputs = gen_input,
                                               initial_state = self.gen_ics,
                                               rnn_type = 'gru',
                                               output_keep_prob = self.keep_prob)
+                #                              cell = gen_cell,
+                
                 self.gen_states = self.gen_rnn_obj.states
 
             with tf.variable_scope('factors'):
@@ -354,7 +355,8 @@ class LFADS(object):
                                                     output_size = hps['factors_dim'],
                                                     transform_name = 'gen_2_factors',
                                                     output_name = 'factors_concat',
-                                                    collections='l2_gen_2_factors'
+                                                    collections='l2_gen_2_factors',
+                                                 normalized=True
                                                  )
                 self.factors = self.fac_obj.output
         else:
@@ -370,12 +372,11 @@ class LFADS(object):
                     batch_size = graph_batch_size,
                     name = 'ci_enc',
                     sequence_lengths = seq_len,
-                    cell = ci_enc_cell,
                     inputs = self.input_to_encoders,
                     initial_state = None,
                     rnn_type = 'gru',
                     output_keep_prob = self.keep_prob)
-                #    inputs = masked_dataset_ph,
+                #    cell = ci_enc_cell,
 
                 if not hps['do_causal_controller']:
                     self.ci_enc_rnn_states = self.ci_enc_rnn_obj.states
