@@ -144,7 +144,6 @@ class DynamicRNN(object):
         else:
             raise ValueError("Didn't understand rnn_type '%s'."%(rnn_type))
             
-
         if initial_state is None:
             # need initial states for fw and bw
             self.init_stddev = 1 / np.sqrt(float(state_dim))
@@ -158,22 +157,26 @@ class DynamicRNN(object):
                                         tile_dimensions, name=name + '_tile')
 
             if rnn_type.lower() == 'lstm':
-                # self.init_c = tf.get_variable(name + '_init_c', [1, state_dim],
-                #                               initializer=self.init_initter,
-                #                               dtype=tf.float32)
+                 self.init_c = tf.get_variable(name + '_init_c', [1, state_dim],
+                                               initializer=self.init_initter,
+                                               dtype=tf.float32)
 
-                #self.init_c_tiled = tf.tile(self.init_c,
-                #                            tile_dimensions, name=name + '_tile')
-                # tuple for lstm
-                #self.init = tf.contrib.rnn.LSTMStateTuple(self.init_c_tiled, self.init_h_tiled)
-                self.init = self.cell.zero_state(batch_size, tf.float32)
+                 self.init_c_tiled = tf.tile(self.init_c,
+                                             tile_dimensions, name=name + '_tile')
+                 # tuple for lstm
+                 #init1 = tf.contrib.rnn.LSTMStateTuple(self.init_c_tiled, self.init_h_tiled)
+                 self.init = self.cell.zero_state(batch_size, dtype = tf.float32)
             else:
                 #self.init = self.init_h_tiled
                 self.init = tf.zeros_like( self.init_h_tiled )
         else:  # if initial state is None
-            self.init = initial_state
+            # for lstms, we have to split whatever initial state was passed in and turn it into a tuple
+            if rnn_type.lower() == 'lstm':
+                split0, split1 = tf.split( initial_state, 2, axis=1 )
+                self.init = tf.contrib.rnn.LSTMStateTuple( split0, split1 )
+            else:
+                self.init = initial_state
             
-
 
         # add dropout if requested
         #self.cell = tf.contrib.rnn.DropoutWrapper(
@@ -189,16 +192,17 @@ class DynamicRNN(object):
         states, last = tf.nn.dynamic_rnn(
             cell=self.cell,
             dtype=tf.float32,
-            # sequence_length = sequence_lengths,
             inputs=inputs,
-            initial_state=self.init,
+            initial_state=self.init
         )
+        # sequence_length = sequence_lengths,
 
         if rnn_type.lower() == 'lstm':
             #self.last_fw.h, _ = self.last_fw
             #self.last_bw.h, _ = self.last_bw
             self.last = last.h
-            self.states = states.h
+            # lstm states only only output h state (and not c)
+            self.states = states
         else:
             self.last = last
             self.states = states

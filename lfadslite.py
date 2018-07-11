@@ -321,8 +321,16 @@ class LFADS(object):
         self.gen_ics_lowd = tf.cond(do_posterior_sample, lambda:self.gen_ics_posterior.sample(), 
             lambda:self.gen_ics_posterior.mean)
 
+        #generator_cell_type = 'lstm'
+        generator_cell_type = 'gru'
+        #generator_cell_type = 'customgru'
+        
         with tf.variable_scope('generator'):
-            self.gen_ics = linear(self.gen_ics_lowd, hps['gen_dim'], name='ics_2_g0')
+            # lstms have twice the number of state dims as everybody else (h and c cells) - correct for that here.
+            if generator_cell_type.lower() == 'lstm':
+                self.gen_ics = linear(self.gen_ics_lowd, hps['gen_dim']*2, name='ics_2_g0')
+            else:
+                self.gen_ics = linear(self.gen_ics_lowd, hps['gen_dim'], name='ics_2_g0')
 
 
         ### CONTROLLER construction
@@ -345,7 +353,7 @@ class LFADS(object):
                                               sequence_lengths = seq_len,
                                               inputs = gen_input,
                                               initial_state = self.gen_ics,
-                                              rnn_type = 'gru',
+                                              rnn_type = generator_cell_type,
                                               recurrent_collections=['l2_gen'],
                                               clip_value = hps['cell_clip_value']
                 )
