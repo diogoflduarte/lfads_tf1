@@ -297,11 +297,14 @@ class LFADS(object):
                 initial_state = None,
                 rnn_type = 'gru',
                 output_keep_prob = self.keep_prob)
-            #    inputs = masked_dataset_ph,
 
+            # wrap the last state with a dropout layer
+            #ic_enc_laststate_dropped = self.ic_enc_rnn_obj.last_tot
+            ic_enc_laststate_dropped = tf.nn.dropout(self.ic_enc_rnn_obj.last_tot, self.keep_prob)
+            
             # map the ic_encoder onto the actual ic layer
             self.gen_ics_posterior = DiagonalGaussianFromInput(
-                x = self.ic_enc_rnn_obj.last_tot,
+                x = ic_enc_laststate_dropped,
                 z_size = hps['ic_dim'],
                 name = 'ic_enc_2_ics',
                 var_min = hps['ic_post_var_min'],
@@ -343,9 +346,11 @@ class LFADS(object):
                 self.gen_states = self.gen_rnn_obj.states
 
             with tf.variable_scope('factors'):
-
+                # wrap the generator states in a dropout layer
+                #gen_states_dropped = self.gen_rnn_obj.states
+                gen_states_dropped = tf.nn.dropout(self.gen_rnn_obj.states, self.keep_prob)
                 ## factors
-                self.fac_obj = LinearTimeVarying(inputs = self.gen_rnn_obj.states,
+                self.fac_obj = LinearTimeVarying(inputs = gen_states_dropped,
                                                     output_size = hps['factors_dim'],
                                                     transform_name = 'gen_2_factors',
                                                     output_name = 'factors_concat',
