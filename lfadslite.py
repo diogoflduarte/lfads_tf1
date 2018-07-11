@@ -13,7 +13,7 @@ import random
 from helper_funcs import linear, init_linear_transform, makeInitialState
 from helper_funcs import ListOfRandomBatches, kind_dict, kind_dict_key
 from helper_funcs import DiagonalGaussianFromInput, DiagonalGaussian, DiagonalGaussianFromExisting, diag_gaussian_log_likelihood
-from helper_funcs import BidirectionalDynamicRNN, DynamicRNN, LinearTimeVarying
+from helper_funcs import LinearTimeVarying
 from helper_funcs import KLCost_GaussianGaussian, Poisson
 from helper_funcs import write_data
 from helper_funcs import printer, mkdir_p
@@ -21,6 +21,7 @@ from helper_funcs import printer, mkdir_p
 #from data_funcs import read_datasets
 from customcells import ComplexCell
 from customcells import CustomGRUCell
+from rnn_helper_funcs import BidirectionalDynamicRNN, DynamicRNN
 from helper_funcs import dropout
 
 
@@ -365,7 +366,7 @@ class LFADS(object):
                                                  collections='l2_gen_2_factors',
                                                  do_bias = False,
                                                  normalized=True
-                                                 )
+                )
                 self.factors = self.fac_obj.output
         else:
             with tf.variable_scope('ci_enc'):
