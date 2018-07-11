@@ -356,7 +356,9 @@ def makeInitialState(state_dim, batch_size, name):
 class BidirectionalDynamicRNN(object):
     def __init__(self, state_dim, batch_size, name, sequence_lengths,
                  cell=None, inputs=None, initial_state=None, rnn_type='gru',
-                 output_keep_prob=1.0, input_keep_prob=1.0):
+                 clip_value = None, recurrent_collections = None):
+#                 output_keep_prob=1.0,
+#                 input_keep_prob=1.0):
 
         if initial_state is None:
             # need initial states for fw and bw
@@ -415,6 +417,11 @@ class BidirectionalDynamicRNN(object):
         elif rnn_type.lower() == 'gru':
             self.cell = tf.nn.rnn_cell.GRUCell(num_units=state_dim)
             #self.cell = tf.contrib.cudnn_rnn.CudnnCompatibleGRUCell(num_units=state_dim)
+        elif rnn_type.lower() == 'customgru':
+            self.cell = CustomGRUCell(num_units = state_dim,
+                                      batch_size = batch_size,
+                                      clip_value = clip_value,
+                                      recurrent_collections = recurrent_collections)
         else:
             self.cell = cell
 
@@ -443,6 +450,8 @@ class BidirectionalDynamicRNN(object):
         self.last_fw, self.last_bw = self.last
 
         if rnn_type.lower() == 'lstm':
+            self.last_fw.h, _ = self.last_fw
+            self.last_bw.h, _ = self.last_bw
             self.last_tot = tf.concat(axis=1, values=[self.last_fw.h, self.last_bw.h])
         else:
             self.last_tot = tf.concat(axis=1, values=[self.last_fw, self.last_bw])
@@ -451,8 +460,9 @@ class BidirectionalDynamicRNN(object):
 class DynamicRNN(object):
     def __init__(self, state_dim, batch_size, name, sequence_lengths,
                  cell=None, inputs=None, initial_state=None, rnn_type='gru',
-                 output_keep_prob=1.0,
-                 input_keep_prob=1.0):
+                 clip_value = None, recurrent_collections = None):
+#                 output_keep_prob=1.0,
+#                 input_keep_prob=1.0):
         if initial_state is None:
             # need initial states for fw and bw
             self.init_stddev = 1 / np.sqrt(float(state_dim))

@@ -281,10 +281,11 @@ class LFADS(object):
             self.input_to_encoders = input_factors_object.output
             
         with tf.variable_scope('ic_enc'):
-            ic_enc_cell = CustomGRUCell(num_units = hps['ic_enc_dim'],\
-                                        batch_size = graph_batch_size,
-                                        clip_value = hps['cell_clip_value'],
-                                        recurrent_collections=['l2_ic_enc'])
+            #ic_enc_cell = CustomGRUCell(num_units = hps['ic_enc_dim'],\
+            #                            batch_size = graph_batch_size,
+            #                            clip_value = hps['cell_clip_value'],
+            #                            recurrent_collections=['l2_ic_enc'])
+            
             #seq_len.set_shape([1, graph_batch_size])
             ## ic_encoder
             self.ic_enc_rnn_obj = BidirectionalDynamicRNN(
@@ -294,9 +295,11 @@ class LFADS(object):
                 sequence_lengths = seq_len,
                 inputs = self.input_to_encoders,
                 initial_state = None,
-                rnn_type = 'gru',
-                output_keep_prob = self.keep_prob)
-            #    cell = ic_enc_cell,
+                clip_value = hps['cell_clip_value'],
+                recurrent_collections=['l2_ic_enc'],
+                rnn_type = 'gru')
+            #    cell = ic_enc_cell
+            #    output_keep_prob = self.keep_prob
 
             # wrap the last state with a dropout layer
             #ic_enc_laststate_dropped = self.ic_enc_rnn_obj.last_tot
@@ -326,10 +329,11 @@ class LFADS(object):
         # if not, skip all these graph elements like so:
         if hps['co_dim'] == 0:
             with tf.variable_scope('generator'):
-                gen_cell = CustomGRUCell(num_units = hps['gen_dim'],
-                                         batch_size = graph_batch_size,
-                                         clip_value = hps['cell_clip_value'],
-                                         recurrent_collections=['l2_gen'])
+                #gen_cell = CustomGRUCell(num_units = hps['gen_dim'],
+                #                         batch_size = graph_batch_size,
+                #                         clip_value = hps['cell_clip_value'],
+                #                         recurrent_collections=['l2_gen'])
+                
                 # setup generator
                 # will be None with no inputs
                 gen_input = self.ext_input
@@ -341,7 +345,10 @@ class LFADS(object):
                                               inputs = gen_input,
                                               initial_state = self.gen_ics,
                                               rnn_type = 'gru',
-                                              output_keep_prob = self.keep_prob)
+                                              recurrent_collections=['l2_gen'],
+                                              clip_value = hps['cell_clip_value']
+                )
+                #    output_keep_prob = self.keep_prob
                 #                              cell = gen_cell,
                 
                 self.gen_states = self.gen_rnn_obj.states
@@ -363,10 +370,10 @@ class LFADS(object):
         else:
             with tf.variable_scope('ci_enc'):
 
-                ci_enc_cell = CustomGRUCell(num_units = hps['ci_enc_dim'],\
-                                            batch_size = graph_batch_size,
-                                            clip_value = hps['cell_clip_value'],
-                                            recurrent_collections=['l2_ci_enc'])
+                #ci_enc_cell = CustomGRUCell(num_units = hps['ci_enc_dim'],\
+                #                            batch_size = graph_batch_size,
+                #                            clip_value = hps['cell_clip_value'],
+                #                            recurrent_collections=['l2_ci_enc'])
                 ## ci_encoder
                 self.ci_enc_rnn_obj = BidirectionalDynamicRNN(
                     state_dim = hps['ci_enc_dim'],
@@ -376,7 +383,10 @@ class LFADS(object):
                     inputs = self.input_to_encoders,
                     initial_state = None,
                     rnn_type = 'gru',
-                    output_keep_prob = self.keep_prob)
+                    recurrent_collections=['l2_ci_enc'],
+                    clip_value = hps['cell_clip_value'])
+                
+                #    output_keep_prob = self.keep_prob
                 #    cell = ci_enc_cell,
 
                 if not hps['do_causal_controller']:
