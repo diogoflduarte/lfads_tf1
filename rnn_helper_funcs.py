@@ -19,58 +19,9 @@ class BidirectionalDynamicRNN(object):
     def __init__(self, state_dim, batch_size, name, sequence_lengths,
                  inputs=None, initial_state=None, rnn_type='gru',
                  clip_value = None, recurrent_collections = None):
-#                 output_keep_prob=1.0,
-#                 input_keep_prob=1.0):
+        #                 output_keep_prob=1.0,
+        #                 input_keep_prob=1.0):
 
-        if initial_state is None:
-            # need initial states for fw and bw
-            self.init_stddev = 1 / np.sqrt(float(state_dim))
-            self.init_initter = tf.random_normal_initializer(0.0, self.init_stddev, dtype=tf.float32)
-
-            self.init_h_fw = tf.get_variable(name + '_init_h_fw', [1, state_dim],
-                                             initializer=self.init_initter,
-                                             dtype=tf.float32)
-            self.init_h_bw = tf.get_variable(name + '_init_h_bw', [1, state_dim],
-                                             initializer=self.init_initter,
-                                             dtype=tf.float32)
-            # lstm has a second parameter c
-            if rnn_type.lower() == 'lstm':
-                self.init_c_fw = tf.get_variable(name + '_init_c_fw', [1, state_dim],
-                                                 initializer=self.init_initter,
-                                                 dtype=tf.float32)
-                self.init_c_bw = tf.get_variable(name + '_init_c_bw', [1, state_dim],
-                                                 initializer=self.init_initter,
-                                                 dtype=tf.float32)
-
-            tile_dimensions = [batch_size, 1]
-
-            # tile the h param
-            self.init_h_fw_tiled = tf.tile(self.init_h_fw,
-                                           tile_dimensions, name=name + '_h_fw_tile')
-            self.init_h_bw_tiled = tf.tile(self.init_h_bw,
-                                           tile_dimensions, name=name + '_h_bw_tile')
-            # tile the c param if needed
-            if rnn_type.lower() == 'lstm':
-                self.init_c_fw_tiled = tf.tile(self.init_c_fw,
-                                               tile_dimensions, name=name + '_c_fw_tile')
-                self.init_c_bw_tiled = tf.tile(self.init_c_bw,
-                                               tile_dimensions, name=name + '_c_bw_tile')
-
-            # do tupling if needed
-            if rnn_type.lower() == 'lstm':
-                # lstm state is a tuple
-                init_fw = tf.contrib.rnn.LSTMStateTuple(self.init_c_fw_tiled, self.init_h_fw_tiled)
-                init_bw = tf.contrib.rnn.LSTMStateTuple(self.init_c_bw_tiled, self.init_h_bw_tiled)
-                self.init_fw = tf.zeros_like( init_fw )
-                self.init_bw = tf.zeros_like( init_bw )
-            else:
-                #self.init_fw = self.init_h_fw_tiled
-                #self.init_bw = self.init_h_bw_tiled
-                self.init_fw = tf.zeros_like( self.init_h_fw_tiled )
-                self.init_bw = tf.zeros_like( self.init_h_bw_tiled )
-                
-        else:  # if initial state is None
-            self.init_fw, self.init_bw = initial_state
 
         # pick your cell
         if rnn_type.lower() == 'lstm':
@@ -86,6 +37,59 @@ class BidirectionalDynamicRNN(object):
                                       recurrent_collections = recurrent_collections)
         else:
             raise ValueError("Didn't understand rnn_type '%s'."%(rnn_type))
+
+        
+        if initial_state is None:
+            # need initial states for fw and bw
+            self.init_stddev = 1 / np.sqrt(float(state_dim))
+            self.init_initter = tf.random_normal_initializer(0.0, self.init_stddev, dtype=tf.float32)
+
+            self.init_h_fw = tf.get_variable(name + '_init_h_fw', [1, state_dim],
+                                             initializer=self.init_initter,
+                                             dtype=tf.float32)
+            self.init_h_bw = tf.get_variable(name + '_init_h_bw', [1, state_dim],
+                                             initializer=self.init_initter,
+                                             dtype=tf.float32)
+            # # lstm has a second parameter c
+            # if rnn_type.lower() == 'lstm':
+            #     self.init_c_fw = tf.get_variable(name + '_init_c_fw', [1, state_dim],
+            #                                      initializer=self.init_initter,
+            #                                      dtype=tf.float32)
+            #     self.init_c_bw = tf.get_variable(name + '_init_c_bw', [1, state_dim],
+            #                                      initializer=self.init_initter,
+            #                                      dtype=tf.float32)
+
+            tile_dimensions = [batch_size, 1]
+
+            # tile the h param
+            self.init_h_fw_tiled = tf.tile(self.init_h_fw,
+                                           tile_dimensions, name=name + '_h_fw_tile')
+            self.init_h_bw_tiled = tf.tile(self.init_h_bw,
+                                           tile_dimensions, name=name + '_h_bw_tile')
+            # tile the c param if needed
+            # if rnn_type.lower() == 'lstm':
+            #     self.init_c_fw_tiled = tf.tile(self.init_c_fw,
+            #                                    tile_dimensions, name=name + '_c_fw_tile')
+            #     self.init_c_bw_tiled = tf.tile(self.init_c_bw,
+            #                                    tile_dimensions, name=name + '_c_bw_tile')
+
+            # do tupling if needed
+            if rnn_type.lower() == 'lstm':
+                # lstm state is a tuple
+                #init_fw = tf.contrib.rnn.LSTMStateTuple(self.init_c_fw_tiled, self.init_h_fw_tiled)
+                #init_bw = tf.contrib.rnn.LSTMStateTuple(self.init_c_bw_tiled, self.init_h_bw_tiled)
+                #self.init_fw = tf.zeros_like( init_fw )
+                #self.init_bw = tf.zeros_like( init_bw )
+                self.init_fw = self.cell.zero_state(batch_size, tf.float32)
+                self.init_bw = self.cell.zero_state(batch_size, tf.float32)
+            else:
+                #self.init_fw = self.init_h_fw_tiled
+                #self.init_bw = self.init_h_bw_tiled
+                self.init_fw = tf.zeros_like( self.init_h_fw_tiled )
+                self.init_bw = tf.zeros_like( self.init_h_bw_tiled )
+                
+        else:  # if initial state is None
+            self.init_fw, self.init_bw = initial_state
 
         # add dropout if requested
         #self.cell = tf.contrib.rnn.DropoutWrapper(
@@ -112,8 +116,8 @@ class BidirectionalDynamicRNN(object):
         self.last_fw, self.last_bw = self.last
 
         if rnn_type.lower() == 'lstm':
-            self.last_fw.h, _ = self.last_fw
-            self.last_bw.h, _ = self.last_bw
+            #self.last_fw.h, _ = self.last_fw
+            #self.last_bw.h, _ = self.last_bw
             self.last_tot = tf.concat(axis=1, values=[self.last_fw.h, self.last_bw.h])
         else:
             self.last_tot = tf.concat(axis=1, values=[self.last_fw, self.last_bw])
@@ -123,40 +127,8 @@ class DynamicRNN(object):
     def __init__(self, state_dim, batch_size, name, sequence_lengths,
                  inputs=None, initial_state=None, rnn_type='gru',
                  clip_value = None, recurrent_collections = None):
-#                 output_keep_prob=1.0,
-#                 input_keep_prob=1.0):
-        if initial_state is None:
-            # need initial states for fw and bw
-            self.init_stddev = 1 / np.sqrt(float(state_dim))
-            self.init_initter = tf.random_normal_initializer(0.0, self.init_stddev, dtype=tf.float32)
-
-            self.init_h = tf.get_variable(name + '_init_h', [1, state_dim],
-                                          initializer=self.init_initter,
-                                          dtype=tf.float32)
-            if rnn_type.lower() == 'lstm':
-                self.init_c = tf.get_variable(name + '_init_c', [1, state_dim],
-                                              initializer=self.init_initter,
-                                              dtype=tf.float32)
-
-            tile_dimensions = [batch_size, 1]
-
-            self.init_h_tiled = tf.tile(self.init_h,
-                                        tile_dimensions, name=name + '_tile')
-
-            if rnn_type.lower() == 'lstm':
-                self.init_c_tiled = tf.tile(self.init_c,
-                                            tile_dimensions, name=name + '_tile')
-
-            if rnn_type.lower() == 'lstm':
-                # tuple for lstm
-                self.init = tf.contrib.rnn.LSTMStateTuple(self.init_c_tiled, self.init_h_tiled)
-            else:
-                #self.init = self.init_h_tiled
-                self.init = tf.zeros_like( self.init_h_tiled )
-        else:  # if initial state is None
-            self.init = initial_state
-            
-
+        #                 output_keep_prob=1.0,
+        #                 input_keep_prob=1.0):
         # pick your cell
         if rnn_type.lower() == 'lstm':
             self.cell = tf.nn.rnn_cell.LSTMCell(num_units=state_dim,
@@ -173,6 +145,36 @@ class DynamicRNN(object):
             raise ValueError("Didn't understand rnn_type '%s'."%(rnn_type))
             
 
+        if initial_state is None:
+            # need initial states for fw and bw
+            self.init_stddev = 1 / np.sqrt(float(state_dim))
+            self.init_initter = tf.random_normal_initializer(0.0, self.init_stddev, dtype=tf.float32)
+
+            self.init_h = tf.get_variable(name + '_init_h', [1, state_dim],
+                                          initializer=self.init_initter,
+                                          dtype=tf.float32)
+            tile_dimensions = [batch_size, 1]
+            self.init_h_tiled = tf.tile(self.init_h,
+                                        tile_dimensions, name=name + '_tile')
+
+            if rnn_type.lower() == 'lstm':
+                # self.init_c = tf.get_variable(name + '_init_c', [1, state_dim],
+                #                               initializer=self.init_initter,
+                #                               dtype=tf.float32)
+
+                #self.init_c_tiled = tf.tile(self.init_c,
+                #                            tile_dimensions, name=name + '_tile')
+                # tuple for lstm
+                #self.init = tf.contrib.rnn.LSTMStateTuple(self.init_c_tiled, self.init_h_tiled)
+                self.init = self.cell.zero_state(batch_size, tf.float32)
+            else:
+                #self.init = self.init_h_tiled
+                self.init = tf.zeros_like( self.init_h_tiled )
+        else:  # if initial state is None
+            self.init = initial_state
+            
+
+
         # add dropout if requested
         #self.cell = tf.contrib.rnn.DropoutWrapper(
         #        self.cell, output_keep_prob=output_keep_prob)
@@ -184,7 +186,7 @@ class DynamicRNN(object):
                               dtype=tf.float32)
         # call dynamic_rnn
         #inputs.set_shape((None, sequence_lengths, inputs.get_shape()[2]))
-        self.states, self.last = tf.nn.dynamic_rnn(
+        states, last = tf.nn.dynamic_rnn(
             cell=self.cell,
             dtype=tf.float32,
             # sequence_length = sequence_lengths,
@@ -192,4 +194,12 @@ class DynamicRNN(object):
             initial_state=self.init,
         )
 
+        if rnn_type.lower() == 'lstm':
+            #self.last_fw.h, _ = self.last_fw
+            #self.last_bw.h, _ = self.last_bw
+            self.last = last.h
+            self.states = states.h
+        else:
+            self.last = last
+            self.states = states
 
