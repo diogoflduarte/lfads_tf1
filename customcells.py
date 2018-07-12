@@ -208,12 +208,11 @@ class ComplexCell(LayerRNNCell):
   def output_size(self):
     return self._num_units_con + self._num_units_gen + 3*self._co_dim + self._factors_dim
 
-  def build(self, inputs_shape, cell_name='', num_units=None, rec_collections_name=None):
+  def build(self, inputs_shape):
       # create GRU weight/bias tensors for generator and controller
       self.build_custom([None, self._co_dim + self._ext_input_dim],
                         cell_name='gen_gru', num_units=self._num_units_gen, rec_collections_name='l2_gen')
       con_inputs_shape = [None, inputs_shape[1].value +  self._factors_dim]
-      print(con_inputs_shape)
       self.build_custom(con_inputs_shape, cell_name='con_gru', num_units=self._num_units_con, rec_collections_name='l2_con')
       self.built = True
 

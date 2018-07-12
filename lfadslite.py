@@ -488,8 +488,7 @@ class LFADS(object):
                 self.complex_outputs, self.complex_final_state =\
                 tf.nn.dynamic_rnn(self.complexcell,
                                   inputs = complex_cell_inputs,
-                                  dtype=tf.float32)
-                                  #initial_state = self.complexcell_init_state,)
+                                  initial_state = self.complexcell_init_state)
 
                 # split the states of the individual RNNs
                 # from the packed "complexcell" state
