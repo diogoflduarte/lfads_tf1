@@ -1,6 +1,5 @@
 import numpy as np
 import tensorflow as tf
-from tensorflow.python.ops import rnn_cell_impl
 import os
 
 from helper_funcs import linear2, linear, kind_dict
@@ -11,86 +10,370 @@ import hashlib
 import numbers
 
 
+from tensorflow.python.ops import nn_ops
+from tensorflow.python.ops import array_ops
+from tensorflow.python.ops import init_ops
+from tensorflow.python.ops import math_ops
+from tensorflow.python.ops.rnn_cell_impl import LayerRNNCell
 
-class CustomGRUCell(tf.nn.rnn_cell.RNNCell):
-    def __init__(self, num_units, batch_size,
-                 clip_value = None,
-                 state_is_tuple = False,
-                 reuse = None,
-                 recurrent_collections=None,
-                 input_collections=None,
-                 forget_bias=1.0):
-        super(CustomGRUCell, self).__init__(_reuse=reuse)
-        self._num_units = num_units
-        self._state_is_tuple = state_is_tuple
-        self._batch_size = batch_size
-        self._clip_value = clip_value
-        self._output_size = self._num_units
-        self._state_size = self._num_units
-        self._rec_collections = recurrent_collections
-        self._input_collections = input_collections
-        self._forget_bias = forget_bias # is not used in LFADS
+class GRUCell(LayerRNNCell):
+  """Gated Recurrent Unit cell (cf. http://arxiv.org/abs/1406.1078).
+  Args:
+    num_units: int, The number of units in the GRU cell.
+    activation: Nonlinearity to use.  Default: `tanh`.
+    reuse: (optional) Python boolean describing whether to reuse variables
+     in an existing scope.  If not `True`, and the existing scope already has
+     the given variables, an error is raised.
+    kernel_initializer: (optional) The initializer to use for the weight and
+    projection matrices.
+    bias_initializer: (optional) The initializer to use for the bias.
+    name: String, the name of the layer. Layers with the same name will
+      share weights, but to avoid mistakes we require reuse=True in such
+      cases.
+    dtype: Default dtype of the layer (default of `None` means use the type
+      of the first input). Required when `build` is called before `call`.
+  """
 
-    @property
-    def state_size(self):
-        return self._state_size
+  def __init__(self,
+               num_units,
+               activation=None,
+               reuse=None,
+               kernel_initializer=None,
+               bias_initializer=None,
+               name=None,
+               dtype=None,
+               recurrent_collections=None):
+    super(GRUCell, self).__init__(_reuse=reuse, name=name, dtype=dtype)
 
-    @property
-    def output_size(self):
-        return self._output_size
-        
+    # Inputs must be 2-dimensional.
+    self.input_spec = base_layer.InputSpec(ndim=2)
 
-    def __call__(self, inputs, state, scope=None):
-        name = type(self).__name__
-        # inputs and state better be a 4-tuple
-        with tf.variable_scope(scope or type(self).__name__):
+    self._num_units = num_units
+    self._activation = activation or math_ops.tanh
+    self._kernel_initializer = kernel_initializer
+    self._bias_initializer = bias_initializer
+    self._rec_collections = recurrent_collections
 
-            with tf.variable_scope("Gates"):
-                #ru = linear(tf.concat(axis=1, values=[inputs, state]),
-                #                2 * self._num_units, name='ru_linear')
-                # MRK, note, hps.input_weight_scale is replaced with 1.0 for now
-                # MRK, separate input and state weights collections
-                r_x, u_x = tf.split(axis=1, num_or_size_splits=2, value=linear2(inputs,
-                                                                               2 * self._num_units,
-                                                                               alpha=1.0, # input_weight_scale
-                                                                               do_bias=False,
-                                                                               name="input_ru_linear",
-                                                                               normalized=False,
-                                                                               collections=self._input_collections))
+  @property
+  def state_size(self):
+    return self._num_units
 
-                r_h, u_h = tf.split(axis=1, num_or_size_splits=2, value=linear2(state,
-                                                                               2 * self._num_units,
-                                                                               do_bias=True,
-                                                                               alpha=1.0, #self._rec_weight_scale,
-                                                                               name="state_ru_linear",
-                                                                               collections=self._rec_collections))
-                r = r_x + r_h
-                u = u_x + u_h
-                r, u = tf.sigmoid(r), tf.sigmoid(u + self._forget_bias)
-                #ru = tf.nn.sigmoid(ru)
-                #r, u = tf.split( ru, 2, axis=1)
+  @property
+  def output_size(self):
+    return self._num_units
 
-            with tf.variable_scope("Candidate"):
-                #c = tf.nn.tanh( _linear([inputs, r * state],
-                #                                          self._num_units, True))
-            # new_h = u * h + (1 - u) * c
-                c_x = linear2(inputs, self._num_units, name="input_c_linear", do_bias=False,
-                             alpha=1.0, #self._input_weight_scale,
-                             normalized=False,
-                             collections=self._input_collections)
-                c_rh = linear2(r * state, self._num_units, name="state_c_linear", do_bias=True,
-                          alpha=1.0, #self._rec_weight_scale,
-                          collections=self._rec_collections)
-                c = tf.tanh(c_x + c_rh)
+  def build(self, inputs_shape):
+    if inputs_shape[1].value is None:
+      raise ValueError("Expected inputs.shape[-1] to be known, saw shape: %s"
+                       % inputs_shape)
 
-            new_h = u*state + (1 - u) * c
+    input_depth = inputs_shape[1].value
+    # MRK, changed the following to allow separate variables for input and recurrent weights
+    self._gate_kernel_input = self.add_variable(
+        "gates/%s_input" % _WEIGHTS_VARIABLE_NAME,
+        shape=[input_depth, 2 * self._num_units],
+        initializer=self._kernel_initializer)
+    self._gate_kernel_rec = self.add_variable(
+        "gates/%s_rec" % _WEIGHTS_VARIABLE_NAME,
+        shape=[self._num_units, 2 * self._num_units],
+        initializer=self._kernel_initializer)
 
-            # clip if requested
-            if self._clip_value is not None:
-                new_h = tf.clip_by_value(new_h, -self._clip_value, self._clip_value)
-            return new_h, new_h            
 
-class ComplexCell(tf.nn.rnn_cell.RNNCell):
+    self._gate_bias = self.add_variable(
+        "gates/%s" % _BIAS_VARIABLE_NAME,
+        shape=[2 * self._num_units],
+        initializer=(
+            self._bias_initializer
+            if self._bias_initializer is not None
+            else init_ops.constant_initializer(1.0, dtype=self.dtype)))
+    
+    # MRK, changed the following to allow separate variables for input and recurrent weights
+    self._candidate_kernel_input = self.add_variable(
+        "candidate/%s_input" % _WEIGHTS_VARIABLE_NAME,
+        shape=[input_depth, self._num_units],
+        initializer=self._kernel_initializer)
+    self._candidate_kernel_rec = self.add_variable(
+        "candidate/%s_rec" % _WEIGHTS_VARIABLE_NAME,
+        shape=[self._num_units, self._num_units],
+        initializer=self._kernel_initializer)
+
+    self._candidate_bias = self.add_variable(
+        "candidate/%s" % _BIAS_VARIABLE_NAME,
+        shape=[self._num_units],
+        initializer=(
+            self._bias_initializer
+            if self._bias_initializer is not None
+            else init_ops.zeros_initializer(dtype=self.dtype)))
+
+    self.built = True
+    # MRK, add the recurrent weights to collections for applying L2
+    if self._rec_collections:
+      tf.add_to_collection(self._rec_collections, self._gate_kernel_rec)
+      tf.add_to_collection(self._rec_collections, self._candidate_kernel_rec)
+
+  def call(self, inputs, state):
+    """Gated recurrent unit (GRU) with nunits cells."""
+    # MRK, seperate matmul for input and recurrent weights    
+    gate_inputs_input = math_ops.matmul(inputs, self._gate_kernel_input)
+    gate_inputs_rec = math_ops.matmul(state, self._gate_kernel_rec)
+    gate_inputs = gate_inputs_input + gate_inputs_rec 
+
+    gate_inputs = nn_ops.bias_add(gate_inputs, self._gate_bias)
+
+    value = math_ops.sigmoid(gate_inputs)
+    r, u = array_ops.split(value=value, num_or_size_splits=2, axis=1)
+
+    r_state = r * state
+
+    #candidate = math_ops.matmul(
+    #    array_ops.concat([inputs, r_state], 1), self._candidate_kernel)
+
+    # MRK, seperate matmul for input and recurrent weights    
+    candidate_input = math_ops.matmul(inputs, self._candidate_kernel_input)
+    candidate_rec = math_ops.matmul(state, self._candidate_kernel_rec)
+    candidate = candidate_input + candidate_rec
+
+    candidate = nn_ops.bias_add(candidate, self._candidate_bias)
+
+    c = self._activation(candidate)
+    new_h = u * state + (1 - u) * c
+    return new_h, new_h
+
+
+class ComplexCell(LayerRNNCell):
+  """Gated Recurrent Unit cell (cf. http://arxiv.org/abs/1406.1078).
+  Args:
+    num_units: int, The number of units in the GRU cell.
+    activation: Nonlinearity to use.  Default: `tanh`.
+    reuse: (optional) Python boolean describing whether to reuse variables
+     in an existing scope.  If not `True`, and the existing scope already has
+     the given variables, an error is raised.
+    kernel_initializer: (optional) The initializer to use for the weight and
+    projection matrices.
+    bias_initializer: (optional) The initializer to use for the bias.
+    name: String, the name of the layer. Layers with the same name will
+      share weights, but to avoid mistakes we require reuse=True in such
+      cases.
+    dtype: Default dtype of the layer (default of `None` means use the type
+      of the first input). Required when `build` is called before `call`.
+  """
+
+  def __init__(self,
+               num_units_con,
+               num_units_gen,
+               factors_dim,
+               co_dim,
+               ext_input_dim,
+               inject_ext_input_to_gen,
+               run_type,
+               keep_prob,
+               var_min=None,
+               activation=None,
+               reuse=None,
+               kernel_initializer=None,
+               bias_initializer=None,
+               name=None,
+               dtype=None,):
+    super(ComplexCell, self).__init__(_reuse=reuse, name=name, dtype=dtype)
+
+    # Inputs must be 2-dimensional.
+    self.input_spec = base_layer.InputSpec(ndim=2)
+
+    self._activation = activation or math_ops.tanh
+    self._kernel_initializer = kernel_initializer
+    self._bias_initializer = bias_initializer
+    self._gate_kernel_input = {}
+    self._gate_kernel_rec = {}
+    self._candidate_kernel_input = {}
+    self._candidate_kernel_rec = {}
+    self._candidate_bias = {}
+    self._gate_bias = {}
+    # make our custom inputs accessible to the class
+    self._inject_ext_input_to_gen = inject_ext_input_to_gen
+    self._var_min = var_min
+    self._run_type = run_type
+    self._num_units_gen = num_units_gen
+    self._num_units_con = num_units_con
+    self._co_dim = co_dim
+    self._factors_dim = factors_dim
+    self._ext_input_dim = ext_input_dim
+    self._keep_prob = keep_prob
+
+
+  @property
+  def state_size(self):
+    return self._num_units_con + self._num_units_gen + 3*self._co_dim + self._factors_dim
+
+  @property
+  def output_size(self):
+    return self._num_units_con + self._num_units_gen + 3*self._co_dim + self._factors_dim
+
+  def build(self, inputs_shape, cell_name='', num_units=None, rec_collections_name=None):
+      # create GRU weight/bias tensors for generator and controller
+      self.build_custom([None, self._co_dim + self._ext_input_dim],
+                        cell_name='gen_gru', num_units=self._num_units_gen, rec_collections_name='l2_gen')
+      con_inputs_shape = [None, inputs_shape[1].value +  self._factors_dim]
+      print(con_inputs_shape)
+      self.build_custom(con_inputs_shape, cell_name='con_gru', num_units=self._num_units_con, rec_collections_name='l2_con')
+      self.built = True
+
+  def build_custom(self, inputs_shape, cell_name='', num_units=None, rec_collections_name=None):
+    if isinstance(inputs_shape, list):
+        input_depth = inputs_shape[1]
+    else:
+        if inputs_shape[1].value is None:
+          raise ValueError("Expected inputs.shape[-1] to be known, saw shape: %s"
+                           % inputs_shape)
+
+        input_depth = inputs_shape[1].value
+
+    # MRK, changed the following to allow separate variables for input and recurrent weights
+    self._gate_kernel_input[cell_name] = self.add_variable(
+        "gates/%s_%s_input" % (cell_name, _WEIGHTS_VARIABLE_NAME),
+        shape=[input_depth, 2 * num_units],
+        initializer=self._kernel_initializer)
+    self._gate_kernel_rec[cell_name] = self.add_variable(
+        "gates/%s_%s_rec" % (cell_name, _WEIGHTS_VARIABLE_NAME),
+        shape=[num_units, 2 * num_units],
+        initializer=self._kernel_initializer)
+
+
+    self._gate_bias[cell_name] = self.add_variable(
+        "gates/%s_%s" % (cell_name, _BIAS_VARIABLE_NAME),
+        shape=[2 * num_units],
+        initializer=(
+            self._bias_initializer
+            if self._bias_initializer is not None
+            else init_ops.constant_initializer(1.0, dtype=self.dtype)))
+    
+    # MRK, changed the following to allow separate variables for input and recurrent weights
+    self._candidate_kernel_input[cell_name] = self.add_variable(
+        "candidate/%s_%s_input" % (cell_name, _WEIGHTS_VARIABLE_NAME),
+        shape=[input_depth, num_units],
+        initializer=self._kernel_initializer)
+    self._candidate_kernel_rec[cell_name] = self.add_variable(
+        "candidate/%s_%s_rec" % (cell_name, _WEIGHTS_VARIABLE_NAME),
+        shape=[num_units, num_units],
+        initializer=self._kernel_initializer)
+
+    self._candidate_bias[cell_name] = self.add_variable(
+        "candidate/%s_%s" % (cell_name, _BIAS_VARIABLE_NAME),
+        shape=[num_units],
+        initializer=(
+            self._bias_initializer
+            if self._bias_initializer is not None
+            else init_ops.zeros_initializer(dtype=self.dtype)))
+
+
+    # MRK, add the recurrent weights to collections for applying L2
+    if rec_collections_name:
+      tf.add_to_collection(rec_collections_name, self._gate_kernel_rec)
+      tf.add_to_collection(rec_collections_name, self._candidate_kernel_rec)
+
+  def gru_block(self, inputs, state, cell_name=''):
+    """Gated recurrent unit (GRU) with nunits cells."""
+    # MRK, seperate matmul for input and recurrent weights    
+    gate_inputs_input = math_ops.matmul(inputs, self._gate_kernel_input[cell_name])
+    gate_inputs_rec = math_ops.matmul(state, self._gate_kernel_rec[cell_name])
+    gate_inputs = gate_inputs_input + gate_inputs_rec 
+
+    gate_inputs = nn_ops.bias_add(gate_inputs, self._gate_bias[cell_name])
+
+    value = math_ops.sigmoid(gate_inputs)
+    r, u = array_ops.split(value=value, num_or_size_splits=2, axis=1)
+
+    r_state = r * state
+
+    #candidate = math_ops.matmul(
+    #    array_ops.concat([inputs, r_state], 1), self._candidate_kernel)
+
+    # MRK, seperate matmul for input and recurrent weights    
+    candidate_input = math_ops.matmul(inputs, self._candidate_kernel_input[cell_name])
+    candidate_rec = math_ops.matmul(state, self._candidate_kernel_rec[cell_name])
+    candidate = candidate_input + candidate_rec
+
+    candidate = nn_ops.bias_add(candidate, self._candidate_bias[cell_name])
+
+    c = self._activation(candidate)
+    new_h = u * state + (1 - u) * c
+    return new_h
+
+
+  def call(self, inputs, state):
+    # if external inputs are used split the inputs
+    if self._ext_input_dim > 0:
+      ext_inputs = inputs[:, -self._ext_input_dim:]
+      con_i = inputs[:, :-self._ext_input_dim]
+    else:
+      con_i = inputs
+
+    # split the state to get the gen and con states, and factor
+    gen_s, con_s, _, _, _, fac_s = \
+      tf.split(state, [self._num_units_con,
+                       self._num_units_gen,
+                       self._co_dim,
+                       self._co_dim,
+                       self._co_dim,
+                       self._factors_dim],  axis=1)
+
+    # input to the controller is (enc_con output and factors)
+    con_inputs = tf.concat([con_i, fac_s], axis=1, )
+
+    # controller GRU recursion, get new state
+    # add dropout to controller inputs (MRK fix)
+    con_inputs = tf.nn.dropout(con_inputs, self._keep_prob)
+    con_s_new = self.gru_block(con_inputs, con_s, cell_name='con_gru')
+
+    # calculate the inputs to the generator
+    with tf.variable_scope("con_2_gen"):
+        # transformation to mean and logvar of the posterior
+        co_mean = linear(con_s_new, self._co_dim,
+                               name="con_2_gen_transform_mean")
+        co_logvar = linear(con_s_new, self._co_dim,
+                                 name="con_2_gen_transform_logvar")
+
+        if self._var_min:
+            co_logvar = tf.log(tf.exp(co_logvar) + self._var_min)
+
+        cos_posterior = DiagonalGaussianFromExisting(
+            co_mean, co_logvar)
+
+        # whether to sample the posterior or pass its mean
+        # MRK, fixed the following
+        do_posterior_sample = tf.logical_or(tf.equal(self._run_type, tf.constant(kind_dict("train"))),
+                                            tf.equal(self._run_type, tf.constant(kind_dict("posterior_sample_and_average"))))
+        co_out = tf.cond(do_posterior_sample, lambda: cos_posterior.sample(), lambda: cos_posterior.mean)
+
+    # generator's inputs
+    if self._ext_input_dim > 0 and self._inject_ext_input_to_gen:
+        # passing external inputs along with controller output as generetor's input
+        gen_inputs = tf.concat([co_out, ext_inputs], axis=1)
+    elif self._ext_input_dim > 0 and not self._inject_ext_input_to_gen:
+        assert 0, "Not Implemented!"
+    else:
+        # using only controller output as generator's input
+        gen_inputs = co_out
+
+    # generator GRU recursion, get the new state
+    gen_s_new = self.gru_block(gen_inputs, gen_s, cell_name='gen_gru')
+
+    # calculate the factors
+    with tf.variable_scope("gen_2_fac"):
+        # add dropout to gen output (MRK fix)
+        gen_s_new_dropped = tf.nn.dropout(gen_s_new, self._keep_prob)
+        fac_s_new = linear(gen_s_new_dropped, self._factors_dim,
+                           name="gen_2_fac_transform",
+                           #collections=self.col_names['fac']
+                       )
+    # pass the states and make other values accessible outside DynamicRNN
+    state_concat = [gen_s_new, con_s_new, co_mean, co_logvar, co_out, fac_s_new]
+    new_h = tf.concat(state_concat, axis=1)
+
+    return new_h, new_h
+
+
+
+class ComplexCell_old(tf.nn.rnn_cell.RNNCell):
 
     def __init__(self, num_units_con, num_units_gen,
                  co_dim, factors_dim, fac_2_con_dim, ext_input_dim,
@@ -220,16 +503,10 @@ class ComplexCell(tf.nn.rnn_cell.RNNCell):
                     co_mean_new_h, co_logvar_new_h)
                 
                 # normally sample, but sometimes use the mean
-                # TODO, MRK, to fix later
-
+                # MRK, fixed the following
                 do_posterior_sample = tf.logical_or(tf.equal(self._kind, tf.constant(kind_dict("train"))),
                             tf.equal(self._kind, tf.constant(kind_dict("posterior_sample_and_average"))))
                 co_out = tf.cond(do_posterior_sample, lambda:cos_posterior.sample(), lambda:cos_posterior.mean)
-
-                #if self._kind in [kind_dict("train"), kind_dict("posterior_sample_and_average")]:
-                #    co_out = cos_posterior.sample()
-                #else:
-                #    co_out = cos_posterior.mean
 
             # generator's inputs
 

@@ -20,7 +20,6 @@ from helper_funcs import printer, mkdir_p
 #from plot_funcs import plot_data, close_all_plots
 #from data_funcs import read_datasets
 from customcells import ComplexCell
-from customcells import CustomGRUCell
 from rnn_helper_funcs import BidirectionalDynamicRNN, DynamicRNN
 from helper_funcs import dropout
 
@@ -67,6 +66,10 @@ class Logger(object):
 class LFADS(object):
 
     def __init__(self, hps, datasets = None):
+
+        #CELL_TYPE = 'lstm'
+        #CELL_TYPE = 'gru'
+        CELL_TYPE = 'customgru'
 
         # to stop certain gradients paths through the graph in backprop
         def entry_stop_gradients(target, mask):
@@ -297,8 +300,8 @@ class LFADS(object):
                 inputs = self.input_to_encoders,
                 initial_state = None,
                 clip_value = hps['cell_clip_value'],
-                recurrent_collections=['l2_ic_enc'],
-                rnn_type = 'gru')
+                recurrent_collections='l2_ic_enc',
+                rnn_type = CELL_TYPE)
             #    cell = ic_enc_cell
             #    output_keep_prob = self.keep_prob
 
@@ -321,13 +324,11 @@ class LFADS(object):
         self.gen_ics_lowd = tf.cond(do_posterior_sample, lambda:self.gen_ics_posterior.sample(), 
             lambda:self.gen_ics_posterior.mean)
 
-        #generator_cell_type = 'lstm'
-        generator_cell_type = 'gru'
-        #generator_cell_type = 'customgru'
+
         
         with tf.variable_scope('generator'):
             # lstms have twice the number of state dims as everybody else (h and c cells) - correct for that here.
-            if generator_cell_type.lower() == 'lstm':
+            if CELL_TYPE.lower() == 'lstm':
                 self.gen_ics = linear(self.gen_ics_lowd, hps['gen_dim']*2, name='ics_2_g0')
             else:
                 self.gen_ics = linear(self.gen_ics_lowd, hps['gen_dim'], name='ics_2_g0')
@@ -353,8 +354,8 @@ class LFADS(object):
                                               sequence_lengths = seq_len,
                                               inputs = gen_input,
                                               initial_state = self.gen_ics,
-                                              rnn_type = generator_cell_type,
-                                              recurrent_collections=['l2_gen'],
+                                              rnn_type = CELL_TYPE,
+                                              recurrent_collections='l2_gen',
                                               clip_value = hps['cell_clip_value']
                 )
                 #    output_keep_prob = self.keep_prob
@@ -392,7 +393,7 @@ class LFADS(object):
                     inputs = self.input_to_encoders,
                     initial_state = None,
                     rnn_type = 'gru',
-                    recurrent_collections=['l2_ci_enc'],
+                    recurrent_collections='l2_ci_enc',
                     clip_value = hps['cell_clip_value'])
                 
                 #    output_keep_prob = self.keep_prob
@@ -426,7 +427,7 @@ class LFADS(object):
                         transform_name = 'ci_enc_2_co_in',
                         output_name = 'ci_enc_output_concat',
                         nonlinearity = None,
-                        collections=['l2_ci_enc_2_co_in'])
+                        collections='l2_ci_enc_2_co_in')
                     self.ci_enc_outputs = self.ci_enc_object.output
 
             ## the controller, controller outputs, generator, and factors are implemented
@@ -451,7 +452,7 @@ class LFADS(object):
                 fac_init_state = makeInitialState(hps['factors_dim'],
                                                   graph_batch_size,
                                                   'factor')
-                comcell_init_state = [con_init_state, self.gen_ics,
+                comcell_init_state = [self.gen_ics, con_init_state,
                                            co_mean_init_state, co_logvar_init_state,
                                            co_sample_init_state, fac_init_state]
                 self.complexcell_init_state = tf.concat(axis=1, values = comcell_init_state)
@@ -465,16 +466,17 @@ class LFADS(object):
                                            hps['co_dim'], # for the sampled controller output
                                            hps['factors_dim']]
 
+
                 # construct the complexcell
-                self.complexcell=ComplexCell(hps['con_dim'],
-                                             hps['gen_dim'],
-                                             hps['co_dim'],
-                                             hps['factors_dim'],
-                                             hps['con_fac_in_dim'],
-                                             hps['ext_input_dim'],
-                                             graph_batch_size,
+                self.complexcell=ComplexCell(num_units_con=hps['con_dim'],
+                                             num_units_gen=hps['gen_dim'],
+                                             factors_dim=hps['factors_dim'],
+                                             co_dim=hps['co_dim'],
+                                             ext_input_dim=hps['ext_input_dim'],
+                                             inject_ext_input_to_gen=True,
                                              var_min = hps['co_post_var_min'],
-                                             kind = self.run_type)
+                                             run_type = self.run_type,
+                                             keep_prob=self.keep_prob)
 
                 # construct the actual RNN
                 #   its inputs are the output of the controller_input_enc
@@ -486,12 +488,12 @@ class LFADS(object):
                 self.complex_outputs, self.complex_final_state =\
                 tf.nn.dynamic_rnn(self.complexcell,
                                   inputs = complex_cell_inputs,
-                                  initial_state = self.complexcell_init_state,
-                                  time_major=False)
+                                  dtype=tf.float32)
+                                  #initial_state = self.complexcell_init_state,)
 
                 # split the states of the individual RNNs
                 # from the packed "complexcell" state
-                self.con_states, self.gen_states, self.co_mean_states, self.co_logvar_states, self.controller_outputs, self.factors =\
+                self.gen_states, self.con_states, self.co_mean_states, self.co_logvar_states, self.controller_outputs, self.factors =\
                 tf.split(self.complex_outputs,
                          self.comcell_state_dims,
                          axis=2)
@@ -530,7 +532,8 @@ class LFADS(object):
         ## calculate the KL cost
         # g0 - build a prior distribution to compare to
         self.gen_ics_prior = DiagonalGaussian(
-            z_size = [graph_batch_size, hps['ic_dim']], name='gen_ics_prior',
+            batch_size=graph_batch_size,
+            z_size = [hps['ic_dim']], name='gen_ics_prior',
             var = hps['ic_prior_var'])
         self.prior_zs_g0 = self.gen_ics_prior
         
@@ -545,7 +548,8 @@ class LFADS(object):
             # if there are controller outputs, calculate a KL cost for them
             # first build a prior to compare to
             self.cos_prior = DiagonalGaussian(
-                z_size = [graph_batch_size, hps['num_steps'], hps['co_dim']],
+                batch_size=graph_batch_size,
+                z_size = [hps['num_steps'], hps['co_dim']],
                 name='cos_prior', var = hps['co_prior_var'])
             # then build a posterior
             self.cos_posterior = DiagonalGaussianFromExisting(
@@ -638,12 +642,15 @@ class LFADS(object):
             if l2_scale == 0:
                 continue
             l2_reg_vars = tf.get_collection(l2_reg)
+            print(l2_reg, l2_reg_vars)
+
             for v in l2_reg_vars:
                 numel = tf.reduce_prod(tf.concat(axis=0, values=tf.shape(v)))
                 numel_f = tf.cast(numel, tf.float32)
                 l2_numels.append(numel_f)
                 v_l2 = tf.reduce_sum(v*v)
                 l2_costs.append(0.5 * l2_scale * v_l2)
+                #l2_costs.append(tf.nn.l2_loss(v))
         if l2_numels:
             self.l2_cost = tf.add_n(l2_costs) / tf.add_n(l2_numels)
 
@@ -843,7 +850,7 @@ class LFADS(object):
 
     def run_epoch(self, datasets, kl_ic_weight, kl_co_weight, dataset_type = "train", run_type="train"):
         ops_to_eval = [self.total_cost, self.rec_cost_train, self.rec_cost_valid,
-                       self.kl_cost]
+                       self.kl_cost, self.l2_cost]
         # get a full list of all data for this type (train/valid)
         all_name_example_idx_pairs = \
           self.shuffle_and_flatten_datasets(datasets, dataset_type)
@@ -892,9 +899,9 @@ class LFADS(object):
                                              keep_ratio=keep_ratio)
             evald_ops_this_batch = session.run(ops_to_eval, feed_dict = feed_dict)
             # for training runs, there is an extra output argument. kill it
-            if len(evald_ops_this_batch) > 4:
-                tc, rc, rc_v, kl, _= evald_ops_this_batch
-                evald_ops_this_batch = (tc, rc, rc_v, kl)
+            if len(evald_ops_this_batch) > 5:
+                tc, rc, rc_v, kl, l2, _= evald_ops_this_batch
+                evald_ops_this_batch = (tc, rc, rc_v, kl, l2)
             evald_ops.append(evald_ops_this_batch)
         evald_ops = np.mean(evald_ops, axis=0)
         return evald_ops
@@ -965,7 +972,7 @@ class LFADS(object):
         valid_costs = []
 
         # print validation costs before the first training step
-        val_total_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, val_kl_cost = \
+        val_total_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, val_kl_cost, val_l2_cost = \
             self.do_validation(datasets,
                              kl_ic_weight=hps['kl_ic_weight'],
                              kl_co_weight=hps['kl_co_weight'],
@@ -1018,13 +1025,13 @@ class LFADS(object):
                                  kl_ic_weight = hps['kl_ic_weight'],
                                  kl_co_weight = hps['kl_co_weight'])
             
-            tr_total_cost, train_set_heldin_samp_cost, train_set_heldout_samp_cost, tr_kl_cost = \
+            tr_total_cost, train_set_heldin_samp_cost, train_set_heldout_samp_cost, tr_kl_cost, l2_cost = \
                 self.do_validation(datasets,
                                  kl_ic_weight = hps['kl_ic_weight'],
                                  kl_co_weight = hps['kl_co_weight'],
                                  dataset_type="train")
 
-            val_total_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, val_kl_cost = \
+            val_total_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, val_kl_cost, _  = \
                 self.do_validation(datasets,
                                  kl_ic_weight = hps['kl_ic_weight'],
                                  kl_co_weight = hps['kl_co_weight'],
@@ -1105,12 +1112,17 @@ class LFADS(object):
 
             kl_weight = hps['kl_ic_weight']
             train_step = session.run(self.train_step)
-            self.printlog("Epoch:%d, step:%d (TRA,VAL_SAMP,VAL_TRI): tot:%.4f,%.4f, rec:%.4f,%.4f,%.4f, R^2(T/V:Held-in,Held-out),%.3f,%.3f,%.3f,%.3f, kl:%.4f,%.4f, kl weight:%.4f" % \
-                  (nepoch, train_step, tr_total_cost, val_total_cost,
-                   train_set_heldin_samp_cost, train_set_heldout_samp_cost, valid_set_heldin_samp_cost,
-                   all_train_R2_heldin, all_train_R2_heldout, all_valid_R2_heldin, all_valid_R2_heldout,
-                   tr_kl_cost, val_kl_cost,
-                   kl_weight))
+            if np.isnan(all_train_R2_heldin):
+                self.printlog("Epoch:%d, step:%d (TRA,VAL_SAMP,VAL_TRI): tot:%.2f,%.2f, rec:%.2f,%.2f,%.2f, kl:%.2f,%.2f, l2:%.4f, kl weight:%.2f" % \
+                      (nepoch, train_step, tr_total_cost, val_total_cost,
+                       train_set_heldin_samp_cost, train_set_heldout_samp_cost, valid_set_heldin_samp_cost,
+                       tr_kl_cost, val_kl_cost, l2_cost, kl_weight))
+            else:
+                self.printlog("Epoch:%d, step:%d (TRA,VAL_SAMP,VAL_TRI): tot:%.2f,%.2f, rec:%.2f,%.2f,%.2f, kl:%.2f,%.2f, l2:%.4f, kl weight:%.2f, R^2(T/V:Held-in,Held-out),%.3f,%.3f,%.3f,%.3f" % \
+                      (nepoch, train_step, tr_total_cost, val_total_cost,
+                       train_set_heldin_samp_cost, train_set_heldout_samp_cost, valid_set_heldin_samp_cost,
+                       tr_kl_cost, val_kl_cost, l2_cost, kl_weight,
+                       all_train_R2_heldin, all_train_R2_heldout, all_valid_R2_heldin, all_valid_R2_heldout,))
 
             is_lve = smth_trial_val_recn_cost < self.lve
 
@@ -1140,10 +1152,6 @@ class LFADS(object):
                                     global_step=self.train_step,
                                     latest_filename='checkpoint_lve')
 
-            #l2 has not been implemented yet
-            l2_cost = 0
-            l2_weight = 0
-
             # TODO: write tensorboard summaries here...
             
             # write csv log file
@@ -1151,11 +1159,11 @@ class LFADS(object):
                 # construct an output string
                 csv_outstr = "epoch,%d, step,%d, total,%.6E,%.6E, \
                 recon,%.6E,%.6E,%.6E,%.6E, R^2 (Held-in, Held-out), %.6E, %.6E, %.6E, %.6E," \
-                             "kl,%.6E,%.6E, l2,%.6E, klweight,%.6E, l2weight,%.6E\n"% \
+                             "kl,%.6E,%.6E, l2,%.6E, klweight,%.6E\n"% \
                 (nepoch, train_step, tr_total_cost, val_total_cost,
                  train_set_heldin_samp_cost, train_set_heldout_samp_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost,
                  all_train_R2_heldin, all_train_R2_heldout, all_valid_R2_heldin, all_valid_R2_heldout,
-                 tr_kl_cost, val_kl_cost, l2_cost, kl_weight, l2_weight)
+                 tr_kl_cost, val_kl_cost, l2_cost, kl_weight)
                 # log to file
                 csv_file = os.path.join(self.hps.lfads_save_dir, self.hps.csv_log+'.csv')
                 with open(csv_file, "a") as myfile:

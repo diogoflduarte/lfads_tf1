@@ -312,15 +312,22 @@ class DiagonalGaussian(Gaussian):
     """
     # MRK todo, Fix for co_dim > 0 (now it works only for co_dim=0)
     
-    def __init__(self, z_size, name, var):
+    def __init__(self, batch_size, z_size, name, var):
         # MRK's fix, letting the mean of the prior to be trainable
         mean_init = 0.0
-        z_mean_1xn = tf.get_variable(name=name+"/mean", shape=[1, z_size[1]],
+        z_size_ = [1]+z_size
+        z_mean_1xn = tf.get_variable(name=name+"/mean", shape=z_size_,
                                  initializer=tf.constant_initializer(mean_init))
-        self.mean_bxn =  tf.tile(z_mean_1xn, tf.stack([z_size[0], 1]))
-        self.mean_bxn.set_shape([None, z_size[1]])
+        print(z_mean_1xn)
+        if len(z_size) == 1:
+            self.mean_bxn =  tf.tile(z_mean_1xn, tf.stack([batch_size, 1]))
+        else:
+            self.mean_bxn = tf.tile(z_mean_1xn, tf.stack([batch_size, 1, 1]))
+
+        self.mean_bxn.set_shape([None] + z_size)
+        print(self.mean_bxn)
         #
-        self.logvar_bxn = tf.log(tf.zeros(z_size) + var)
+        self.logvar_bxn = tf.log(tf.zeros([batch_size] + z_size) + var)
         self.noise_bxn = tf.random_normal(tf.shape(self.logvar_bxn))
  
 
