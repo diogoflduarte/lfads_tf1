@@ -12,9 +12,10 @@ import random
 # utils defined by CP
 from helper_funcs import linear, init_linear_transform, makeInitialState
 from helper_funcs import ListOfRandomBatches, kind_dict, kind_dict_key
-from helper_funcs import DiagonalGaussianFromInput, DiagonalGaussian, DiagonalGaussianFromExisting, diag_gaussian_log_likelihood
+from helper_funcs import DiagonalGaussianFromInput, DiagonalGaussian, LearnableAutoRegressive1Prior
+from helper_funcs import DiagonalGaussianFromExisting, LearnableDiagonalGaussian, diag_gaussian_log_likelihood
 from helper_funcs import LinearTimeVarying
-from helper_funcs import KLCost_GaussianGaussian, Poisson
+from helper_funcs import KLCost_GaussianGaussian, KLCost_GaussianGaussianProcessSampled
 from helper_funcs import write_data
 from helper_funcs import printer, mkdir_p
 #from plot_funcs import plot_data, close_all_plots
@@ -82,7 +83,7 @@ class LFADS(object):
         logger = Logger(os.path.join(hps['lfads_save_dir'], "lfads_output.log"))
         self.printlog = logger.printlog
 
-    	# build the graph
+        # build the graph
         # set the learning rate, defaults to the hyperparam setting
         self.learning_rate = tf.Variable(float(hps['learning_rate_init']), trainable=False, name="learning_rate")
 
@@ -530,7 +531,7 @@ class LFADS(object):
 
         ## calculate the KL cost
         # g0 - build a prior distribution to compare to
-        self.gen_ics_prior = DiagonalGaussian(
+        self.gen_ics_prior = LearnableDiagonalGaussian(
             batch_size=graph_batch_size,
             z_size = [hps['ic_dim']], name='gen_ics_prior',
             var = hps['ic_prior_var'])
@@ -543,17 +544,35 @@ class LFADS(object):
         self.kl_cost_g0 = tf.reduce_mean(self.kl_cost_g0_b)
         # total KL cost
         self.kl_cost = self.kl_cost_g0 * self.kl_ic_weight
-        if hps['co_dim'] !=0 :
+        if hps['co_dim'] > 0:
             # if there are controller outputs, calculate a KL cost for them
             # first build a prior to compare to
+            # Controller outputs
+            #autocorrelation_taus = [hps.prior_ar_atau for x in range(hps.co_dim)]
+            #noise_variances = [hps.prior_ar_nvar for x in range(hps.co_dim)]
+            #self.cos_prior = prior_zs_ar_con = \
+            #    LearnableAutoRegressive1Prior(graph_batch_size, hps.co_dim,
+            #                                  autocorrelation_taus,
+            #                                  noise_variances,
+            #                                  hps.do_train_prior_ar_atau,
+            #                                  hps.do_train_prior_ar_nvar,
+            #                                  hps['num_steps'], "u_prior_ar1")
+
+            # zero mean DiagonalGaussian
             self.cos_prior = DiagonalGaussian(
-                batch_size=graph_batch_size,
-                z_size = [hps['num_steps'], hps['co_dim']],
+                z_size = [graph_batch_size, hps['num_steps'], hps['co_dim']],
                 name='cos_prior', var = hps['co_prior_var'])
+
             # then build a posterior
             self.cos_posterior = DiagonalGaussianFromExisting(
                 self.co_mean_states,
                 self.co_logvar_states)
+
+            #print(self.co_mean_states)
+            # MRK, changed this to LFADS'
+            #self.kl_cost_co_b_t = \
+            #    KLCost_GaussianGaussianProcessSampled(
+            #        self.cos_posterior, self.cos_prior).kl_cost_b
 
             # CO KL cost per timestep
             self.kl_cost_co_b_t = KLCost_GaussianGaussian(self.cos_posterior,
@@ -641,7 +660,6 @@ class LFADS(object):
             if l2_scale == 0:
                 continue
             l2_reg_vars = tf.get_collection(l2_reg)
-            print(l2_reg, l2_reg_vars)
 
             for v in l2_reg_vars:
                 numel = tf.reduce_prod(tf.concat(axis=0, values=tf.shape(v)))

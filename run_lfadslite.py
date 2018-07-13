@@ -87,7 +87,11 @@ IC_POST_VAR_MIN = 0.0001      # protection from KL blowing up
 CO_PRIOR_VAR = 0.1
 CO_POST_VAR_MIN = 0.0001
 
-
+# params for autoregressive prior for the controller
+PRIOR_AR_AUTOCORRELATION = 10.0
+PRIOR_AR_PROCESS_VAR = 0.1
+DO_TRAIN_PRIOR_AR_ATAU = True
+DO_TRAIN_PRIOR_AR_NVAR = True
 
 flags = tf.app.flags
 flags.DEFINE_string("kind", "train",
@@ -193,7 +197,9 @@ flags.DEFINE_float("co_prior_var", CO_PRIOR_VAR,
 flags.DEFINE_float("co_post_var_min", CO_POST_VAR_MIN,
                    "Variance of control input prior distribution.")
 
-
+# EXTERNAL INPUTS
+flags.DEFINE_integer("ext_input_dim", EXT_INPUT_DIM,
+    "Dimension of external inputs if any.")
 
 # CONTROLLER
 # This parameter critically controls whether or not there is a controller
@@ -203,8 +209,15 @@ flags.DEFINE_float("co_post_var_min", CO_POST_VAR_MIN,
 flags.DEFINE_integer("co_dim", CO_DIM,
     "Number of control net outputs (>0 builds that graph).")
 
-flags.DEFINE_integer("ext_input_dim", EXT_INPUT_DIM,
-    "Dimension of external inputs if any.")
+flags.DEFINE_float("prior_ar_atau",  PRIOR_AR_AUTOCORRELATION,
+                   "Initial autocorrelation of AR(1) priors.")
+flags.DEFINE_float("prior_ar_nvar", PRIOR_AR_PROCESS_VAR,
+                   "Initial noise variance for AR(1) priors.")
+flags.DEFINE_boolean("do_train_prior_ar_atau", DO_TRAIN_PRIOR_AR_ATAU,
+                     "Is the value for atau an init, or the constant value?")
+flags.DEFINE_boolean("do_train_prior_ar_nvar", DO_TRAIN_PRIOR_AR_NVAR,
+                     "Is the value for noise variance an init, or the constant \
+                     value?")
 
 
 
@@ -468,6 +481,11 @@ def build_hyperparameter_dict(flags):
   # Controller
   d['do_causal_controller'] = flags.do_causal_controller
   d['controller_input_lag'] = flags.controller_input_lag
+  d['prior_ar_atau'] = flags.prior_ar_atau
+  d['prior_ar_nvar'] = flags.prior_ar_nvar
+  d['do_train_prior_ar_atau'] = flags.do_train_prior_ar_atau
+  d['do_train_prior_ar_nvar'] = flags.do_train_prior_ar_nvar
+
 #  d['do_feed_factors_to_controller'] = flags.do_feed_factors_to_controller
   d['co_dim'] = flags.co_dim
   d['ext_input_dim'] = flags.ext_input_dim

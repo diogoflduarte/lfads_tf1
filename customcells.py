@@ -210,22 +210,13 @@ class ComplexCell(LayerRNNCell):
 
   def build(self, inputs_shape):
       # create GRU weight/bias tensors for generator and controller
-      self.build_custom([None, self._co_dim + self._ext_input_dim],
+      self.build_custom(self._co_dim + self._ext_input_dim,
                         cell_name='gen_gru', num_units=self._num_units_gen, rec_collections_name='l2_gen')
-      con_inputs_shape = [None, inputs_shape[1].value +  self._factors_dim]
-      self.build_custom(con_inputs_shape, cell_name='con_gru', num_units=self._num_units_con, rec_collections_name='l2_con')
+      con_input_depth = inputs_shape[1].value +  self._factors_dim
+      self.build_custom(con_input_depth, cell_name='con_gru', num_units=self._num_units_con, rec_collections_name='l2_con')
       self.built = True
 
-  def build_custom(self, inputs_shape, cell_name='', num_units=None, rec_collections_name=None):
-    if isinstance(inputs_shape, list):
-        input_depth = inputs_shape[1]
-    else:
-        if inputs_shape[1].value is None:
-          raise ValueError("Expected inputs.shape[-1] to be known, saw shape: %s"
-                           % inputs_shape)
-
-        input_depth = inputs_shape[1].value
-
+  def build_custom(self, input_depth, cell_name='', num_units=None, rec_collections_name=None):
     # MRK, changed the following to allow separate variables for input and recurrent weights
     self._gate_kernel_input[cell_name] = self.add_variable(
         "gates/%s_%s_input" % (cell_name, _WEIGHTS_VARIABLE_NAME),
@@ -235,7 +226,6 @@ class ComplexCell(LayerRNNCell):
         "gates/%s_%s_rec" % (cell_name, _WEIGHTS_VARIABLE_NAME),
         shape=[num_units, 2 * num_units],
         initializer=self._kernel_initializer)
-
 
     self._gate_bias[cell_name] = self.add_variable(
         "gates/%s_%s" % (cell_name, _BIAS_VARIABLE_NAME),
@@ -263,11 +253,10 @@ class ComplexCell(LayerRNNCell):
             if self._bias_initializer is not None
             else init_ops.zeros_initializer(dtype=self.dtype)))
 
-
     # MRK, add the recurrent weights to collections for applying L2
     if rec_collections_name:
-      tf.add_to_collection(rec_collections_name, self._gate_kernel_rec)
-      tf.add_to_collection(rec_collections_name, self._candidate_kernel_rec)
+      tf.add_to_collection(rec_collections_name, self._gate_kernel_rec[cell_name])
+      tf.add_to_collection(rec_collections_name, self._candidate_kernel_rec[cell_name])
 
   def gru_block(self, inputs, state, cell_name=''):
     """Gated recurrent unit (GRU) with nunits cells."""
@@ -283,9 +272,6 @@ class ComplexCell(LayerRNNCell):
 
     r_state = r * state
 
-    #candidate = math_ops.matmul(
-    #    array_ops.concat([inputs, r_state], 1), self._candidate_kernel)
-
     # MRK, seperate matmul for input and recurrent weights    
     candidate_input = math_ops.matmul(inputs, self._candidate_kernel_input[cell_name])
     candidate_rec = math_ops.matmul(state, self._candidate_kernel_rec[cell_name])
@@ -297,7 +283,6 @@ class ComplexCell(LayerRNNCell):
     new_h = u * state + (1 - u) * c
     return new_h
 
-
   def call(self, inputs, state):
     # if external inputs are used split the inputs
     if self._ext_input_dim > 0:
@@ -306,7 +291,7 @@ class ComplexCell(LayerRNNCell):
     else:
       con_i = inputs
 
-    # split the state to get the gen and con states, and factor
+    # split the state to get the gen and con states, and factors
     gen_s, con_s, _, _, _, fac_s = \
       tf.split(state, [self._num_units_con,
                        self._num_units_gen,
