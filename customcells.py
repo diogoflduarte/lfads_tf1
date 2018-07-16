@@ -292,7 +292,7 @@ class ComplexCell(LayerRNNCell):
       con_i = inputs
 
     # split the state to get the gen and con states, and factors
-    gen_s, con_s, _, _, _, fac_s = \
+    con_s, gen_s, _, _, _, fac_s = \
       tf.split(state, [self._num_units_con,
                        self._num_units_gen,
                        self._co_dim,
