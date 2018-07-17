@@ -198,7 +198,7 @@ class ComplexCell(LayerRNNCell):
     self._factors_dim = factors_dim
     self._ext_input_dim = ext_input_dim
     self._keep_prob = keep_prob
-    print(self._num_units_con)
+
 
   @property
   def state_size(self):
@@ -213,7 +213,6 @@ class ComplexCell(LayerRNNCell):
       self.build_custom(self._co_dim + self._ext_input_dim,
                         cell_name='gen_gru', num_units=self._num_units_gen, rec_collections_name='l2_gen')
       con_input_depth = inputs_shape[1].value +  self._factors_dim
-      print(con_input_depth)
       self.build_custom(con_input_depth, cell_name='con_gru', num_units=self._num_units_con, rec_collections_name='l2_con')
       self.built = True
 

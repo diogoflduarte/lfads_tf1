@@ -455,7 +455,7 @@ class LFADS(object):
                 fac_init_state = makeInitialState(hps['factors_dim'],
                                                   graph_batch_size,
                                                   'factor')
-                comcell_init_state = [self.gen_ics, con_init_state,
+                comcell_init_state = [con_init_state, self.gen_ics,
                                            co_mean_init_state, co_logvar_init_state,
                                            co_sample_init_state, fac_init_state]
                 self.complexcell_init_state = tf.concat(axis=1, values = comcell_init_state)
