@@ -420,17 +420,19 @@ class LFADS(object):
 
                 ## take a linear transform of the ci_enc output
                 #    this is to lower the dimensionality of the ci_enc
-                with tf.variable_scope('ci_enc_2_co_in'):
-                    # one input from the encoder, another will come back from factors
-                    self.ci_enc_object = LinearTimeVarying(
-                        inputs=self.ci_enc_rnn_states,
-                        output_size = hps['con_ci_enc_in_dim'],
-                        transform_name = 'ci_enc_2_co_in',
-                        output_name = 'ci_enc_output_concat',
-                        nonlinearity = None,
-                        collections='l2_ci_enc_2_co_in')
-                    self.ci_enc_outputs = self.ci_enc_object.output
+                #with tf.variable_scope('ci_enc_2_co_in'):
+                #    # one input from the encoder, another will come back from factors
+                #    self.ci_enc_object = LinearTimeVarying(
+                #        inputs=self.ci_enc_rnn_states,
+                #        output_size = hps['con_ci_enc_in_dim'],
+                #        transform_name = 'ci_enc_2_co_in',
+                #       output_name = 'ci_enc_output_concat',
+                #        nonlinearity = None,
+                #        collections='l2_ci_enc_2_co_in')
+                #    self.ci_enc_outputs = self.ci_enc_object.output
 
+                # pass ci_enc output directly to the controller
+                self.ci_enc_outputs = self.ci_enc_rnn_states
             ## the controller, controller outputs, generator, and factors are implemented
             #     in one RNN whose individual cell is "complex"
             #  this is required do to feedback pathway from factors->controller.
@@ -460,8 +462,8 @@ class LFADS(object):
 
 
                 # here is what the state vector will look like
-                self.comcell_state_dims = [hps['con_dim'],
-                                           hps['gen_dim'],
+                self.comcell_state_dims = [hps['gen_dim'],
+                                           hps['con_dim'],
                                            hps['co_dim'], # for the controller output means
                                            hps['co_dim'], # for the variances
                                            hps['co_dim'], # for the sampled controller output
@@ -469,8 +471,8 @@ class LFADS(object):
 
 
                 # construct the complexcell
-                self.complexcell=ComplexCell(num_units_con=hps['con_dim'],
-                                             num_units_gen=hps['gen_dim'],
+                self.complexcell=ComplexCell(num_units_gen=hps['gen_dim'],
+                                             num_units_con=hps['con_dim'],
                                              factors_dim=hps['factors_dim'],
                                              co_dim=hps['co_dim'],
                                              ext_input_dim=hps['ext_input_dim'],

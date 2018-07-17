@@ -159,8 +159,8 @@ class ComplexCell(LayerRNNCell):
   """
 
   def __init__(self,
-               num_units_con,
                num_units_gen,
+               num_units_con,
                factors_dim,
                co_dim,
                ext_input_dim,
@@ -198,7 +198,7 @@ class ComplexCell(LayerRNNCell):
     self._factors_dim = factors_dim
     self._ext_input_dim = ext_input_dim
     self._keep_prob = keep_prob
-
+    print(self._num_units_con)
 
   @property
   def state_size(self):
@@ -213,6 +213,7 @@ class ComplexCell(LayerRNNCell):
       self.build_custom(self._co_dim + self._ext_input_dim,
                         cell_name='gen_gru', num_units=self._num_units_gen, rec_collections_name='l2_gen')
       con_input_depth = inputs_shape[1].value +  self._factors_dim
+      print(con_input_depth)
       self.build_custom(con_input_depth, cell_name='con_gru', num_units=self._num_units_con, rec_collections_name='l2_con')
       self.built = True
 
@@ -272,7 +273,7 @@ class ComplexCell(LayerRNNCell):
 
     r_state = r * state
 
-    # MRK, seperate matmul for input and recurrent weights    
+    # MRK, separate matmul for input and recurrent weights
     candidate_input = math_ops.matmul(inputs, self._candidate_kernel_input[cell_name])
     candidate_rec = math_ops.matmul(state, self._candidate_kernel_rec[cell_name])
     candidate = candidate_input + candidate_rec
@@ -293,8 +294,8 @@ class ComplexCell(LayerRNNCell):
 
     # split the state to get the gen and con states, and factors
     gen_s, con_s, _, _, _, fac_s = \
-      tf.split(state, [self._num_units_con,
-                       self._num_units_gen,
+      tf.split(state, [self._num_units_gen,
+                       self._num_units_con,
                        self._co_dim,
                        self._co_dim,
                        self._co_dim,
