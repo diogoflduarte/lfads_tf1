@@ -1239,7 +1239,7 @@ class LFADS(object):
             # MRK, change the LR decay based on valid cost (previously was based on train cost)
             #valid_cost_to_use = val_total_cost
             # use training cost for learning rate annealing
-            valid_cost_to_use = tr_total_cost
+            valid_cost_to_use = val_total_cost
             #if n_lr > 0 and len(valid_costs) > n_lr and (valid_cost_to_use > max(valid_costs[-n_lr:])):
             #    self.printlog("Decreasing learning rate")
             #    self.run_learning_rate_decay_opt()
@@ -1251,9 +1251,9 @@ class LFADS(object):
 
             # early stopping when no improvement of validation cost for 3*n_lr
             #if len(valid_costs) > n_lr*3 and valid_cost_to_use > np.max(valid_costs[-n_lr*3:]):
-            #if n_lr > 0 and nepoch - lve_epoch > 3*n_lr:
-            #    self.printlog("No improvement of the validation cost! Stopping the training!")
-            #    break
+            if n_lr > 0 and nepoch - lve_epoch > 3*n_lr:
+                self.printlog("No improvement on the validation cost! Stopping the training!")
+                break
 
             valid_costs.append(valid_cost_to_use)
             #train_costs.append(tr_total_cost)
