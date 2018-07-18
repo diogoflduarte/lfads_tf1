@@ -113,6 +113,10 @@ class LFADS(object):
             self.run_type = tf.placeholder(tf.int32, name='run_type')
             self.kl_ic_weight = tf.placeholder(tf.float32, name='kl_ic_weight')
             self.kl_co_weight = tf.placeholder(tf.float32, name='kl_co_weight')
+            # ramp KL and L2 cost weights
+            self.kl_weight = tf.placeholder(tf.float32, name='kl_weight')
+            self.l2_weight = tf.placeholder(tf.float32, name='l2_weight')
+
             # name of the dataset
             self.dataName = tf.placeholder(tf.string, shape=(), name='dataset_name')
             if hps['ext_input_dim'] > 0:
@@ -674,7 +678,7 @@ class LFADS(object):
             self.l2_cost = tf.add_n(l2_costs) / tf.add_n(l2_numels)
 
         ## calculate total training cost
-        self.total_cost = self.l2_cost + self.kl_cost + self.rec_cost_train
+        self.total_cost = self.l2_weight * self.l2_cost + self.kl_weight * self.kl_cost + self.rec_cost_train
         
 
         if hps.do_train_encoder_only:
@@ -741,7 +745,7 @@ class LFADS(object):
     ## functions to interface with the outside world
     def build_feed_dict(self, train_name, data_bxtxd, cv_rand_mask=None, ext_input_bxtxi=None, run_type=None,
                         keep_prob=None, kl_ic_weight=1.0, kl_co_weight=1.0,
-                        keep_ratio=None):
+                        keep_ratio=None, kl_weight=1.0, l2_weight=1.0):
       """Build the feed dictionary, handles cases where there is no value defined.
 
       Args:
@@ -770,6 +774,8 @@ class LFADS(object):
       feed_dict[self.dataset_ph] = data_bxtxd
       feed_dict[self.kl_ic_weight] = kl_ic_weight
       feed_dict[self.kl_co_weight] = kl_co_weight
+      feed_dict[self.kl_weight] = kl_weight
+      feed_dict[self.l2_weight] = l2_weight
 
       if self.ext_input is not None and ext_input_bxtxi is not None:
           feed_dict[self.ext_input] = ext_input_bxtxi
@@ -841,13 +847,15 @@ class LFADS(object):
       return all_name_example_idx_pairs
 
 
-    def train_epoch(self, datasets, do_save_ckpt, kl_ic_weight, kl_co_weight):
+    def train_epoch(self, datasets, do_save_ckpt, kl_ic_weight, kl_co_weight, kl_weight, l2_weight):
     # train_epoch runs the entire training set once
     #    (it is mostly a wrapper around "run_epoch")
     # afterwards it saves a checkpoint if requested
         collected_op_values = self.run_epoch(datasets, kl_ic_weight,
                                              kl_co_weight, dataset_type="train",
-                                             run_type = "train")
+                                             run_type = "train",
+                                             kl_weight=kl_weight,
+                                             l2_weight=l2_weight)
 
         if do_save_ckpt:
           session = tf.get_default_session()
@@ -858,16 +866,20 @@ class LFADS(object):
 
         return collected_op_values
 
-    def do_validation(self, datasets, kl_ic_weight, kl_co_weight, dataset_type):
+    def do_validation(self, datasets, kl_ic_weight, kl_co_weight, dataset_type, kl_weight, l2_weight):
     # do_validation performs an evaluation of the reconstruction cost
     #    can do this on either train or valid datasets
     #    (it is mostly a wrapper around "run_epoch")
         collected_op_values = self.run_epoch(datasets, kl_ic_weight,
                                              kl_co_weight,  dataset_type=dataset_type,
-                                             run_type = "valid")
+                                             run_type = "valid",
+                                             kl_weight=kl_weight,
+                                             l2_weight=l2_weight
+                                             )
         return collected_op_values
 
-    def run_epoch(self, datasets, kl_ic_weight, kl_co_weight, dataset_type = "train", run_type="train"):
+    def run_epoch(self, datasets, kl_ic_weight, kl_co_weight, dataset_type = "train", run_type="train",
+                  kl_weight=1.0, l2_weight=1.0):
         ops_to_eval = [self.total_cost, self.rec_cost_train, self.rec_cost_valid,
                        self.kl_cost, self.l2_cost]
         # get a full list of all data for this type (train/valid)
@@ -915,7 +927,9 @@ class LFADS(object):
                                              run_type = kind_dict("train"),
                                              kl_ic_weight = kl_ic_weight,
                                              kl_co_weight = kl_co_weight,
-                                             keep_ratio=keep_ratio)
+                                             keep_ratio=keep_ratio,
+                                             kl_weight=kl_weight,
+                                             l2_weight=l2_weight)
             evald_ops_this_batch = session.run(ops_to_eval, feed_dict = feed_dict)
             # for training runs, there is an extra output argument. kill it
             if len(evald_ops_this_batch) > 5:
@@ -957,6 +971,19 @@ class LFADS(object):
         session = tf.get_default_session()
         return session.run(self.learning_rate)
 
+    def get_kl_l2_weights(self, session):
+    # MRK, get the KL and L2 ramp weights
+        train_step = session.run(self.train_step)
+        l2_weight = float(train_step - self.hps['l2_start_step']) / float(self.hps['l2_increase_steps'])
+        # clip to 0-1
+        l2_weight = min(max(l2_weight, 0), 1)
+
+        kl_weight = float(train_step - self.hps['kl_start_step']) / float(self.hps['kl_increase_steps'])
+        # clip to 0-1
+        kl_weight = min(max(kl_weight, 0.0), 1.0)
+
+        return kl_weight, l2_weight
+
 
     def train_model(self, datasets, target_num_epochs=None):
     # this is the main loop for training a model
@@ -990,13 +1017,15 @@ class LFADS(object):
 
         valid_costs = []
 
+        kl_weight, l2_weight = self.get_kl_l2_weights(session)
         # print validation costs before the first training step
         val_total_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, val_kl_cost, val_l2_cost = \
             self.do_validation(datasets,
                              kl_ic_weight=hps['kl_ic_weight'],
                              kl_co_weight=hps['kl_co_weight'],
-                             dataset_type="train")
-        kl_weight = hps['kl_ic_weight']
+                             dataset_type="train",
+                             kl_weight=kl_weight,
+                             l2_weight=l2_weight)
         train_step = session.run(self.train_step)
         self.printlog("Epoch:%d, step:%d (TRAIN, VALID): total: %.2f, %.2f\
         recon: %.2f, %.2f, %.2f,    kl: %.2f, %.2f, kl weight: %.2f" % \
@@ -1037,24 +1066,33 @@ class LFADS(object):
                 do_save_ckpt = True if nepoch == (target_num_epochs-1) else do_save_ckpt
 
             start_time = time.time()
-            
+
+            # MRK, get the KL and L2 ramp weights
+            kl_weight, l2_weight = self.get_kl_l2_weights(session)
+
             # CP/MRK: we no longer use these step-specific outputs
             #tr_total_cost, train_set_heldin_samp_cost, train_set_heldout_samp_cost, tr_kl_cost = \
             self.train_epoch(datasets, do_save_ckpt=do_save_ckpt,
                                  kl_ic_weight = hps['kl_ic_weight'],
-                                 kl_co_weight = hps['kl_co_weight'])
+                                 kl_co_weight = hps['kl_co_weight'],
+                                 kl_weight=kl_weight,
+                                 l2_weight=l2_weight)
             
             tr_total_cost, train_set_heldin_samp_cost, train_set_heldout_samp_cost, tr_kl_cost, l2_cost = \
                 self.do_validation(datasets,
                                  kl_ic_weight = hps['kl_ic_weight'],
                                  kl_co_weight = hps['kl_co_weight'],
-                                 dataset_type="train")
+                                 dataset_type="train",
+                                 kl_weight=kl_weight,
+                                 l2_weight=l2_weight)
 
             val_total_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, val_kl_cost, _  = \
                 self.do_validation(datasets,
                                  kl_ic_weight = hps['kl_ic_weight'],
                                  kl_co_weight = hps['kl_co_weight'],
-                                 dataset_type="valid")
+                                 dataset_type="valid",
+                                 kl_weight=kl_weight,
+                                 l2_weight=l2_weight)
 
             epoch_time = time.time() - start_time
             self.printlog("Elapsed time: %f" %epoch_time)
@@ -1129,18 +1167,17 @@ class LFADS(object):
             # recon cost over dropped samples
             smth_samp_val_recn_cost = (1. - coef) * smth_samp_val_recn_cost + coef * train_set_heldout_samp_cost
 
-            kl_weight = hps['kl_ic_weight']
             train_step = session.run(self.train_step)
             if np.isnan(all_train_R2_heldin):
-                self.printlog("Epoch:%d, step:%d (TRA,VAL_SAMP,VAL_TRI): tot:%.2f,%.2f, rec:%.2f,%.2f,%.2f, kl:%.2f,%.2f, l2:%.4f, kl weight:%.2f" % \
+                self.printlog("Epoch:%d, step:%d (TRA,VAL_SAMP,VAL_TRI): tot:%.2f,%.2f, rec:%.2f,%.2f,%.2f, kl:%.2f,%.2f, l2:%.4f, kl_weight:%.2f, l2_weight:%.2f" % \
                       (nepoch, train_step, tr_total_cost, val_total_cost,
                        train_set_heldin_samp_cost, train_set_heldout_samp_cost, valid_set_heldin_samp_cost,
-                       tr_kl_cost, val_kl_cost, l2_cost, kl_weight))
+                       tr_kl_cost, val_kl_cost, l2_cost, kl_weight, l2_weight))
             else:
-                self.printlog("Epoch:%d, step:%d (TRA,VAL_SAMP,VAL_TRI): tot:%.2f,%.2f, rec:%.2f,%.2f,%.2f, kl:%.2f,%.2f, l2:%.4f, kl weight:%.2f, R^2(T/V:Held-in,Held-out),%.3f,%.3f,%.3f,%.3f" % \
+                self.printlog("Epoch:%d, step:%d (TRA,VAL_SAMP,VAL_TRI): tot:%.2f,%.2f, rec:%.2f,%.2f,%.2f, kl:%.2f,%.2f, l2:%.4f, kl_weight:%.2f, l2_weight:%.2f, R^2(T/V:Held-in,Held-out),%.3f,%.3f,%.3f,%.3f" % \
                       (nepoch, train_step, tr_total_cost, val_total_cost,
                        train_set_heldin_samp_cost, train_set_heldout_samp_cost, valid_set_heldin_samp_cost,
-                       tr_kl_cost, val_kl_cost, l2_cost, kl_weight,
+                       tr_kl_cost, val_kl_cost, l2_cost, kl_weight, l2_weight,
                        all_train_R2_heldin, all_train_R2_heldout, all_valid_R2_heldin, all_valid_R2_heldout,))
 
             is_lve = smth_trial_val_recn_cost < self.lve
@@ -1178,11 +1215,11 @@ class LFADS(object):
                 # construct an output string
                 csv_outstr = "epoch,%d, step,%d, total,%.6E,%.6E, \
                 recon,%.6E,%.6E,%.6E,%.6E, R^2 (Held-in, Held-out), %.6E, %.6E, %.6E, %.6E," \
-                             "kl,%.6E,%.6E, l2,%.6E, klweight,%.6E\n"% \
+                             "kl,%.6E,%.6E, l2,%.6E, klweight,%.6E, l2weight,%.6E\n"% \
                 (nepoch, train_step, tr_total_cost, val_total_cost,
                  train_set_heldin_samp_cost, train_set_heldout_samp_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost,
                  all_train_R2_heldin, all_train_R2_heldout, all_valid_R2_heldin, all_valid_R2_heldout,
-                 tr_kl_cost, val_kl_cost, l2_cost, kl_weight)
+                 tr_kl_cost, val_kl_cost, l2_cost, kl_weight, l2_weight)
                 # log to file
                 csv_file = os.path.join(self.hps.lfads_save_dir, self.hps.csv_log+'.csv')
                 with open(csv_file, "a") as myfile:

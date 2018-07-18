@@ -86,8 +86,12 @@ IC_PRIOR_VAR = 0.1
 IC_POST_VAR_MIN = 0.0001      # protection from KL blowing up
 CO_PRIOR_VAR = 0.1
 CO_POST_VAR_MIN = 0.0001
+KL_START_STEP = 0
+L2_START_STEP = 0
+KL_INCREASE_STEPS = 500
+L2_INCREASE_STEPS = 500
 
-# params for autoregressive prior for the controller
+# params for autoregressive prior for the controller (not used now)
 PRIOR_AR_AUTOCORRELATION = 10.0
 PRIOR_AR_PROCESS_VAR = 0.1
 DO_TRAIN_PRIOR_AR_ATAU = True
@@ -196,6 +200,26 @@ flags.DEFINE_float("co_prior_var", CO_PRIOR_VAR,
                    "Variance of control input prior distribution.")
 flags.DEFINE_float("co_post_var_min", CO_POST_VAR_MIN,
                    "Variance of control input prior distribution.")
+
+
+# Sometimes the task can be sufficiently hard to learn that the
+# optimizer takes the 'easy route', and simply minimizes the KL
+# divergence, setting it to near zero, and the optimization gets
+# stuck.  These two parameters will help avoid that by by getting the
+# optimization to 'latch' on to the main optimization, and only
+# turning in the regularizers later.
+flags.DEFINE_integer("kl_start_step", KL_START_STEP,
+                     "Start increasing weight after this many steps.")
+# training passes, not epochs, increase by 0.5 every kl_increase_steps
+flags.DEFINE_integer("kl_increase_steps", KL_INCREASE_STEPS,
+                     "Increase weight of kl cost to avoid local minimum.")
+# Same story for l2 regularizer.  One wants a simple generator, for scientific
+# reasons, but not at the expense of hosing the optimization.
+flags.DEFINE_integer("l2_start_step", L2_START_STEP,
+                     "Start increasing l2 weight after this many steps.")
+flags.DEFINE_integer("l2_increase_steps", L2_INCREASE_STEPS,
+                     "Increase weight of l2 cost to avoid local minimum.")
+
 
 # EXTERNAL INPUTS
 flags.DEFINE_integer("ext_input_dim", EXT_INPUT_DIM,
@@ -522,6 +546,11 @@ def build_hyperparameter_dict(flags):
   # Underfitting
   d['kl_ic_weight'] = flags.kl_ic_weight
   d['kl_co_weight'] = flags.kl_co_weight
+
+  d['kl_start_step'] = flags.kl_start_step
+  d['kl_increase_steps'] = flags.kl_increase_steps
+  d['l2_start_step'] = flags.l2_start_step
+  d['l2_increase_steps'] = flags.l2_increase_steps
 
   return d
 
