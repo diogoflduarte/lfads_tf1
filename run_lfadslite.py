@@ -11,9 +11,8 @@ import data_funcs as utils
 
 #lfadslite
 from helper_funcs import kind_dict, kind_dict_key
+from data_funcs import load_datasets
 
-
-## need to implement:
 MAX_CKPT_TO_KEEP = 5
 MAX_CKPT_TO_KEEP_LVE = 5
 CSV_LOG = "fitlog"
@@ -35,7 +34,8 @@ IC_DIM = 64
 FACTORS_DIM = 50
 IC_ENC_DIM = 128
 GEN_DIM = 200
-BATCH_SIZE = 128
+TRAIN_BATCH_SIZE = 800
+EVAL_BATCH_SIZE = 800
 LEARNING_RATE_INIT = 0.01
 LEARNING_RATE_DECAY_FACTOR = 0.95
 LEARNING_RATE_STOP = 0.00001
@@ -44,6 +44,7 @@ DO_RESET_LEARNING_RATE = False
 
 # flag to only allow training of the encoder (i.e., lock the generator, factors readout, rates readout, controller, etc weights)
 DO_TRAIN_ENCODER_ONLY = False
+
 # flag to allow training the readin (alignment) matrices (only used in cases where alignment matrices are used
 DO_TRAIN_READIN = True
 
@@ -61,6 +62,8 @@ MAX_GRAD_NORM = 200.0
 CELL_CLIP_VALUE = 5.0
 KEEP_PROB = 0.95
 KEEP_RATIO = 1.0
+CD_GRAD_PASSTHRU_PROB = 0.0
+
 CV_KEEP_RATIO = 1.0
 CV_RAND_SEED = 0.0
 
@@ -74,6 +77,8 @@ DO_CAUSAL_CONTROLLER = False
 CONTROLLER_INPUT_LAG = 1
 CI_ENC_DIM = 128
 CON_DIM = 128
+EXT_INPUT_DIM = 0
+
 # scale of regularizer on time correlation of inferred inputs
 KL_IC_WEIGHT = 1.0
 KL_CO_WEIGHT = 1.0
@@ -81,8 +86,16 @@ IC_PRIOR_VAR = 0.1
 IC_POST_VAR_MIN = 0.0001      # protection from KL blowing up
 CO_PRIOR_VAR = 0.1
 CO_POST_VAR_MIN = 0.0001
+KL_START_STEP = 0
+L2_START_STEP = 0
+KL_INCREASE_STEPS = 500
+L2_INCREASE_STEPS = 500
 
-
+# params for autoregressive prior for the controller (not used now)
+PRIOR_AR_AUTOCORRELATION = 10.0
+PRIOR_AR_PROCESS_VAR = 0.1
+DO_TRAIN_PRIOR_AR_ATAU = True
+DO_TRAIN_PRIOR_AR_NVAR = True
 
 flags = tf.app.flags
 flags.DEFINE_string("kind", "train",
@@ -189,6 +202,28 @@ flags.DEFINE_float("co_post_var_min", CO_POST_VAR_MIN,
                    "Variance of control input prior distribution.")
 
 
+# Sometimes the task can be sufficiently hard to learn that the
+# optimizer takes the 'easy route', and simply minimizes the KL
+# divergence, setting it to near zero, and the optimization gets
+# stuck.  These two parameters will help avoid that by by getting the
+# optimization to 'latch' on to the main optimization, and only
+# turning in the regularizers later.
+flags.DEFINE_integer("kl_start_step", KL_START_STEP,
+                     "Start increasing weight after this many steps.")
+# training passes, not epochs, increase by 0.5 every kl_increase_steps
+flags.DEFINE_integer("kl_increase_steps", KL_INCREASE_STEPS,
+                     "Increase weight of kl cost to avoid local minimum.")
+# Same story for l2 regularizer.  One wants a simple generator, for scientific
+# reasons, but not at the expense of hosing the optimization.
+flags.DEFINE_integer("l2_start_step", L2_START_STEP,
+                     "Start increasing l2 weight after this many steps.")
+flags.DEFINE_integer("l2_increase_steps", L2_INCREASE_STEPS,
+                     "Increase weight of l2 cost to avoid local minimum.")
+
+
+# EXTERNAL INPUTS
+flags.DEFINE_integer("ext_input_dim", EXT_INPUT_DIM,
+    "Dimension of external inputs if any.")
 
 # CONTROLLER
 # This parameter critically controls whether or not there is a controller
@@ -197,6 +232,18 @@ flags.DEFINE_float("co_post_var_min", CO_POST_VAR_MIN,
 # then no controller.
 flags.DEFINE_integer("co_dim", CO_DIM,
     "Number of control net outputs (>0 builds that graph).")
+
+flags.DEFINE_float("prior_ar_atau",  PRIOR_AR_AUTOCORRELATION,
+                   "Initial autocorrelation of AR(1) priors.")
+flags.DEFINE_float("prior_ar_nvar", PRIOR_AR_PROCESS_VAR,
+                   "Initial noise variance for AR(1) priors.")
+flags.DEFINE_boolean("do_train_prior_ar_atau", DO_TRAIN_PRIOR_AR_ATAU,
+                     "Is the value for atau an init, or the constant value?")
+flags.DEFINE_boolean("do_train_prior_ar_nvar", DO_TRAIN_PRIOR_AR_NVAR,
+                     "Is the value for noise variance an init, or the constant \
+                     value?")
+
+
 
 # The controller will be more powerful if it can see the encoding of the entire
 # trial.  However, this allows the controller to create inferred inputs that are
@@ -222,14 +269,17 @@ flags.DEFINE_boolean("do_causal_controller",
                      DO_CAUSAL_CONTROLLER,
                      "Restrict the controller create only causal inferred \
                      inputs?")
-flags.DEFINE_integer("controller_input_lag", CONTROLLER_INPUT_LAG, 
+flags.DEFINE_integer("controller_input_lag", CONTROLLER_INPUT_LAG,
                      "Time lag on the encoding to controller t-lag for \
                      forward, t+lag for reverse.")
 
 
 # OPTIMIZATION
-flags.DEFINE_integer("batch_size", BATCH_SIZE,
+flags.DEFINE_integer("train_batch_size", TRAIN_BATCH_SIZE,
                      "Batch size to use during training.")
+flags.DEFINE_integer("eval_batch_size", EVAL_BATCH_SIZE,
+                     "Batch size to use during training.")
+
 flags.DEFINE_float("learning_rate_init", LEARNING_RATE_INIT,
                    "Learning rate initial value")
 flags.DEFINE_float("learning_rate_decay_factor", LEARNING_RATE_DECAY_FACTOR,
@@ -265,7 +315,7 @@ flags.DEFINE_float("cell_clip_value", CELL_CLIP_VALUE,
 
 # This flag is used for an experiment where one wants to know if the dynamics
 # learned by the generator generalize across conditions. In that case, you might
-# train up a model on one set of data, and then only further train the encoder on 
+# train up a model on one set of data, and then only further train the encoder on
 # another set of data (the conditions to be tested) so that the model is forced
 # to use the same dynamics to describe that data.
 # If you don't care about that particular experiment, this flag should always be
@@ -292,6 +342,7 @@ flags.DEFINE_float("keep_prob", KEEP_PROB, "Dropout keep probability.")
 
 # COORDINATED DROPOUT
 flags.DEFINE_float("keep_ratio", KEEP_RATIO, "Coordinated Dropout input keep probability.")
+flags.DEFINE_float("cd_grad_passthru_prob", CD_GRAD_PASSTHRU_PROB, "Probability of passing through gradients in coordinated dropout.")
 
 # CROSS-VALIDATION
 flags.DEFINE_float("cv_keep_ratio", CV_KEEP_RATIO, "Cross-validation keep probability.")
@@ -446,7 +497,7 @@ def build_hyperparameter_dict(flags):
   d['ic_enc_dim'] = flags.ic_enc_dim
   d['gen_dim'] = flags.gen_dim
 
-  #lfadslite
+  # lfadslite
   d['con_ci_enc_in_dim'] = flags.con_ci_enc_in_dim
   d['con_fac_in_dim'] = flags.con_fac_in_dim
   d['in_factors_dim'] = flags.in_factors_dim
@@ -459,12 +510,19 @@ def build_hyperparameter_dict(flags):
   # Controller
   d['do_causal_controller'] = flags.do_causal_controller
   d['controller_input_lag'] = flags.controller_input_lag
-#  d['do_feed_factors_to_controller'] = flags.do_feed_factors_to_controller
+  d['prior_ar_atau'] = flags.prior_ar_atau
+  d['prior_ar_nvar'] = flags.prior_ar_nvar
+  d['do_train_prior_ar_atau'] = flags.do_train_prior_ar_atau
+  d['do_train_prior_ar_nvar'] = flags.do_train_prior_ar_nvar
+
+  #  d['do_feed_factors_to_controller'] = flags.do_feed_factors_to_controller
   d['co_dim'] = flags.co_dim
+  d['ext_input_dim'] = flags.ext_input_dim
   d['ci_enc_dim'] = flags.ci_enc_dim
   d['con_dim'] = flags.con_dim
   # Optimization
-  d['batch_size'] = flags.batch_size
+  d['train_batch_size'] = flags.train_batch_size
+  d['eval_batch_size'] = flags.eval_batch_size
   d['learning_rate_init'] = flags.learning_rate_init
   d['learning_rate_decay_factor'] = flags.learning_rate_decay_factor
   d['learning_rate_stop'] = flags.learning_rate_stop
@@ -474,14 +532,16 @@ def build_hyperparameter_dict(flags):
   d['cell_clip_value'] = flags.cell_clip_value
 
   # training options
-  d['do_train_encoder_only']  = flags.do_train_encoder_only
-  d['do_train_readin']  = flags.do_train_readin
-  
+  d['do_train_encoder_only'] = flags.do_train_encoder_only
+  d['do_train_readin'] = flags.do_train_readin
+
   # Overfitting
   d['keep_prob'] = flags.keep_prob
   d['keep_ratio'] = flags.keep_ratio
+  d['cd_grad_passthru_prob'] = flags.cd_grad_passthru_prob
   d['cv_keep_ratio'] = flags.cv_keep_ratio
   d['cv_rand_seed'] = flags.cv_rand_seed
+
   d['l2_gen_scale'] = flags.l2_gen_scale
   d['l2_con_scale'] = flags.l2_con_scale
   d['l2_ic_enc_scale'] = flags.l2_ic_enc_scale
@@ -492,6 +552,11 @@ def build_hyperparameter_dict(flags):
   # Underfitting
   d['kl_ic_weight'] = flags.kl_ic_weight
   d['kl_co_weight'] = flags.kl_co_weight
+
+  d['kl_start_step'] = flags.kl_start_step
+  d['kl_increase_steps'] = flags.kl_increase_steps
+  d['l2_start_step'] = flags.l2_start_step
+  d['l2_increase_steps'] = flags.l2_increase_steps
 
   return d
 
@@ -522,7 +587,7 @@ def train(hps, datasets):
   #  sess.run(model.learning_rate.initializer)
 
   # temporary for testing:
-  model.train_model(hps, run_mode='pbt', max_epochs=1)
+  model.train_model(hps, run_mode='pbt', num_steps=200)
 
 
 def write_model_runs(hps, datasets, output_fname=None):
@@ -631,46 +696,6 @@ def clean_data_dict(data_dict):
   return data_dict
 
 
-def load_datasets(data_dir, data_filename_stem):
-  """Load the datasets from a specified directory.
-
-  Example files look like
-    >data_dir/my_dataset_first_day
-    >data_dir/my_dataset_second_day
-
-  If my_dataset (filename) stem is in the directory, the read routine will try
-  and load it.  The datasets dictionary will then look like
-  dataset['first_day'] -> (first day data dictionary)
-  dataset['second_day'] -> (first day data dictionary)
-
-  Args:
-    data_dir: The directory from which to load the datasets.
-    data_filename_stem: The stem of the filename for the datasets.
-
-  Returns:
-    datasets: a dataset dictionary, with one name->data dictionary pair for
-    each dataset file.
-  """
-  print("Reading data from ", data_dir)
-  datasets = utils.read_datasets(data_dir, data_filename_stem)
-  for k, data_dict in datasets.items():
-    datasets[k] = clean_data_dict(data_dict)
-
-    train_total_size = len(data_dict['train_data'])
-    if train_total_size == 0:
-      print("Did not load training set.")
-    else:
-      print("Found training set with number examples: ", train_total_size)
-
-    valid_total_size = len(data_dict['valid_data'])
-    if valid_total_size == 0:
-      print("Did not load validation set.")
-    else:
-      print("Found validation set with number examples: ", valid_total_size)
-
-  return datasets
-
-
 def main(_):
   """Get this whole shindig off the ground."""
   d = build_hyperparameter_dict(FLAGS)
@@ -682,7 +707,7 @@ def main(_):
                   kind_dict("posterior_sample_and_average"),
                   kind_dict("prior_sample"),
                   kind_dict("write_model_params")]:
-    datasets = load_datasets(hps.data_dir, hps.data_filename_stem)
+    datasets = load_datasets(hps.data_dir, hps.data_filename_stem, hps)
   else:
     raise ValueError('Kind {} is not supported.'.format(kind))
 
