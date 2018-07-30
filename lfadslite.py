@@ -933,8 +933,8 @@ class LFADS(object):
         for key, value in hps.iteritems():
             params[key] = value
         tf.logging.set_verbosity(tf.logging.INFO)
-        self.setup_stdout_logger(hps)
-        self.setup_tf_logger(hps)
+        #self.setup_stdout_logger(hps)
+        #self.setup_tf_logger(hps)
         config = tf.ConfigProto(allow_soft_placement=True,
                                 log_device_placement=True)
         hps['n_epochs_eval'] = 10
@@ -948,10 +948,10 @@ class LFADS(object):
             keep_checkpoint_max=hps['max_ckpt_to_keep'],
             #tf_random_seed=19830610,
             # TODO, MRK, need to fix the model_dir and the log dir
-            model_dir = 'gs://pbt-test-bucket/runs',#'file:/' + hps['lfads_save_dir'],
-            #model_dir=hps['lfads_save_dir'],
+            #model_dir = 'gs://pbt-test-bucket/runs',#'file:/' + hps['lfads_save_dir'],
+            model_dir=hps['lfads_save_dir'],
             session_config=config,
-            tpu_config=tf.contrib.tpu.TPUConfig(iterations_per_loop=iterations_per_loop),
+            tpu_config=tf.contrib.tpu.TPUConfig(iterations_per_loop=1),
         )
         eval_batch_size = params['eval_batch_size']
 
