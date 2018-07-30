@@ -122,7 +122,7 @@ class LFADS(object):
         print(hps)
         hps['n_epochs_eval'] = 1
         self.datasets = datasets
-        self.setup_stdout_logger(hps)
+        #self.setup_stdout_logger(hps)
         if hps['device'].lower() == 'tpu':
             hps['use_tpu'] = True
         else:
@@ -951,7 +951,7 @@ class LFADS(object):
             #model_dir = 'gs://pbt-test-bucket/runs',#'file:/' + hps['lfads_save_dir'],
             model_dir=hps['lfads_save_dir'],
             session_config=config,
-            tpu_config=tf.contrib.tpu.TPUConfig(iterations_per_loop=1),
+            tpu_config=tf.contrib.tpu.TPUConfig(iterations_per_loop=1, num_shards=1),
         )
         eval_batch_size = params['eval_batch_size']
 
@@ -971,8 +971,10 @@ class LFADS(object):
             train_costs = lfads.evaluate(eval_input_train, name='train_data', steps=2)
             valid_costs = lfads.evaluate(eval_input_valid, name='valid_data', steps=2)
 
-            self.printlog('Training costs:', train_costs)
-            self.printlog('Validation costs:', valid_costs)
+            #self.printlog('Training costs:', train_costs)
+            #self.printlog('Validation costs:', valid_costs)
+            print('Training costs:', train_costs)
+            print('Validation costs:', valid_costs)
 
             # Making parameters available for lfads_wrappper
             if hps['checkpoint_pb_load_name'] == 'checkpoint_lve':
@@ -1089,7 +1091,8 @@ class LFADS(object):
         E, T, D  = data_extxd.shape
         E_to_process = hps.ps_nexamples_to_process
         if E_to_process > E:
-          self.printlog("Setting number of posterior samples to process to : %d" % E)
+          #self.printlog("Setting number of posterior samples to process to : %d" % E)
+          print("Setting number of posterior samples to process to : %d" % E)
           E_to_process = E
 
         # make a bunch of placeholders to store the posterior sample means
@@ -1169,7 +1172,8 @@ class LFADS(object):
                 if self.hps.co_dim > 0:
                     controller_outputs = controller_outputs + model_values['controller_outputs']
 
-        self.printlog("")
+        #self.printlog("")
+        print("")
         model_runs = {}
         model_runs['gen_ics'] = gen_ics
         model_runs['gen_states'] = gen_states
@@ -1241,13 +1245,14 @@ class LFADS(object):
             else:
               fname = output_fname + data_name + '_' + data_kind + '_' + kind
 
-            self.printlog("Writing data for %s data and kind %s to file %s." % (data_name, data_kind, fname))
+            #self.printlog("Writing data for %s data and kind %s to file %s." % (data_name, data_kind, fname))
+            print("Writing data for %s data and kind %s to file %s." % (data_name, data_kind, fname))
             model_runs = self.eval_model_runs_avg_epoch(data_name, data_extxd)
             all_model_runs.append(model_runs)
             full_fname = os.path.join(hps.lfads_save_dir, fname)
             write_data(full_fname, model_runs, compression='gzip')
-            self.printlog("Done.")
-
+            #self.printlog("Done.")
+            print("Done.")
         return all_model_runs
 
             
