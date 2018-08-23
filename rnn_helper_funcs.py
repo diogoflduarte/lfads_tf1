@@ -1,17 +1,8 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-
 import numpy as np
 import tensorflow as tf
-import os
-import h5py
-import json
-import sys
-import warnings
-import errno
-
-
 from customcells import GRUCell
 
 

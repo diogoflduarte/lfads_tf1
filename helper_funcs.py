@@ -51,42 +51,6 @@ def printer(data):
     sys.stdout.write("\r\x1b[K" + data.__str__())
     sys.stdout.flush()
 
-
-def write_data(data_fname, data_dict, use_json=False, compression=None):
-    """Write data in HDF5 format.
-
-    Args:
-      data_fname: The filename of teh file in which to write the data.
-      data_dict:  The dictionary of data to write. The keys are strings
-        and the values are numpy arrays.
-      use_json (optional): human readable format for simple items
-      compression (optional): The compression to use for h5py (disabled by
-        default because the library borks on scalars, otherwise try 'gzip').
-    """
-
-    dir_name = os.path.dirname(data_fname)
-    if not os.path.exists(dir_name):
-        os.makedirs(dir_name)
-
-    if use_json:
-        the_file = open(data_fname, 'w')
-        json.dump(data_dict, the_file)
-        the_file.close()
-    else:
-        try:
-            with h5py.File(data_fname, 'w') as hf:
-                for k, v in data_dict.items():
-                    clean_k = k.replace('/', '_')
-                    if clean_k is not k:
-                        print('Warning: saving variable with name: ', k, ' as ', clean_k)
-                    else:
-                        print('Saving variable with name: ', clean_k)
-                    hf.create_dataset(clean_k, data=v, compression=compression)
-        except IOError:
-            print("Cannot open %s for writing.", data_fname)
-            raise
-
-
 def init_linear_transform(in_size, out_size, name=None, collections=None, mat_init_value=None, bias_init_value=None, normalized=False, do_bias=True):
     # generic function (we use linear transforms in a lot of places)
     # initialize the weights of the linear transformation based on the size of the inputs
@@ -193,47 +157,6 @@ def init_linear(in_size, out_size, do_bias=True, mat_init_value=None, alpha=1.0,
         b = None
 
     return (w, b)
-
-
-# LFADS's version of linear
-def linear2(x, out_size, do_bias=True, alpha=1.0, identity_if_possible=False,
-            normalized=False, name=None, collections=None):
-    """Linear (affine) transformation, y = x W + b, for a variety of
-    configurations.
-
-    Args:
-      x: input The tensor to tranformation.
-      out_size: The integer size of non-batch output dimension.
-      do_bias (optional): Add a learnable bias vector to the operation.
-      alpha (optional): A multiplicative scaling for the weight initialization
-        of the matrix, in the form \alpha * 1/\sqrt{x.shape[1]}.
-      identity_if_possible (optional): just return identity,
-        if x.shape[1] == out_size.
-      normalized (optional): Option to divide out by the norms of the rows of W.
-      name (optional): The name prefix to add to variables.
-      collections (optional): List of additional collections. (Placed in
-        tf.GraphKeys.GLOBAL_VARIABLES already, so no need for that.)
-
-    Returns:
-      In the equation, y = x W + b, returns the tensorflow op that yields y.
-    """
-    in_size = int(x.get_shape()[1])  # from Dimension(10) -> 10
-    stddev = alpha / np.sqrt(float(in_size))
-    mat_init = tf.random_normal_initializer(0.0, stddev)
-    wname = (name + "/W") if name else "/W"
-
-    if identity_if_possible and in_size == out_size:
-        # Sometimes linear layers are nothing more than size adapters.
-        return tf.identity(x, name=(wname + '_ident'))
-
-    W, b = init_linear(in_size, out_size, do_bias=do_bias, alpha=alpha,
-                       normalized=normalized, name=name, collections=collections)
-
-    if do_bias:
-        return tf.matmul(x, W) + b
-    else:
-        return tf.matmul(x, W)
-
 
 def linear(x, out_size, name, collections=None, mat_init_value=None, bias_init_value=None):
     # generic function (we use linear transforms in a lot of places)
@@ -548,6 +471,49 @@ def makeInitialState(state_dim, batch_size, name):
                                name=name + '_init_state_tiled')
     return init_state_tiled
 
+
+
+
+class LinearTimeVarying_NEW(object):
+    # self.output = linear transform
+    # self.output_nl = nonlinear transform
+
+    def __init__(self, inputs, output_size, transform_name, output_name=None, nonlinearity=None,
+                 collections=None, W=None, b=None, normalized=False, do_bias=True):
+        num_timesteps = tf.shape(inputs)[1]
+        # must return "as_list" to get ints
+        input_size = inputs.get_shape().as_list()[2]
+        outputs = []
+        outputs_nl = []
+        # use any matrices provided, if they exist
+        if W is not None and b is None:
+            raise ValueError('LinearTimeVarying: must provide either W and b, or neither')
+        if W is None and b is not None:
+            raise ValueError('LinearTimeVarying: must provide either W and b, or neither')
+
+        if W is None and b is None:
+            W, b = init_linear_transform(input_size, output_size, name=transform_name,
+                                         collections=collections, normalized=normalized,
+                                         do_bias=do_bias)
+        self.W = W
+        self.b = b
+
+        # inputs_permuted = tf.transpose(inputs, perm=[1, 0, 2])
+        # initial_outputs = tf.TensorArray(dtype=tf.float32, size=num_timesteps, name='init_linear_outputs')
+        # initial_outputs_nl = tf.TensorArray(dtype=tf.float32, size=num_timesteps, name='init_nl_outputs')
+
+        # MRK: replaced tf.while_loop with a simple tf.matmul
+        tiled_W = tf.tile(W, [tf.shape(inputs)[0], 1])
+        tiled_W = tf.reshape(tiled_W, [-1, W.get_shape()[0], W.get_shape()[1]])
+
+        tiled_b = tf.tile(b, [tf.shape(inputs)[0], 1])
+        tiled_b = tf.reshape(tiled_b, [-1, b.get_shape()[0], b.get_shape()[1]])
+        output = tf.matmul(inputs, tiled_W) + tiled_b
+        if nonlinearity is 'exp':
+            output_nl = tf.exp(output)
+            self.output_nl = output_nl
+        print('NEW TIMEVARYING USED')
+        self.output = output
 
 class LinearTimeVarying(object):
     # self.output = linear transform

@@ -16,7 +16,7 @@ from helper_funcs import DiagonalGaussianFromInput, DiagonalGaussian, LearnableA
 from helper_funcs import DiagonalGaussianFromExisting, LearnableDiagonalGaussian, diag_gaussian_log_likelihood
 from helper_funcs import LinearTimeVarying
 from helper_funcs import KLCost_GaussianGaussian, KLCost_GaussianGaussianProcessSampled
-from helper_funcs import write_data
+from data_funcs import write_data
 from helper_funcs import printer, mkdir_p
 #from plot_funcs import plot_data, close_all_plots
 #from data_funcs import read_datasets
@@ -275,6 +275,11 @@ class LFADS(object):
 
         # apply cross-validation dropout
         masked_dataset_ph = tf.div(masked_dataset_ph, self.cv_keep_ratio) * self.cv_binary_mask_batch
+        # add noise insteaad of zeroing the held-out samples
+        #masked_noise = (1. - self.cv_binary_mask_batch) * tf.transpose(
+        #    tf.random_shuffle(tf.transpose(tf.random_shuffle(self.dataset_ph), perm=[1,0,2])),
+        #    perm=[1,0,2])
+        masked_dataset_ph = masked_dataset_ph * self.cv_binary_mask_batch #+ masked_noise
 
         # define input to encoders
         if hps.in_factors_dim==0:
@@ -974,11 +979,11 @@ class LFADS(object):
     def get_kl_l2_weights(self, session):
     # MRK, get the KL and L2 ramp weights
         train_step = session.run(self.train_step)
-        l2_weight = float(train_step - self.hps['l2_start_step']) / float(self.hps['l2_increase_steps'])
+        l2_weight = float(train_step - self.hps['l2_start_step'] + 1) / float(self.hps['l2_increase_steps'])
         # clip to 0-1
         l2_weight = min(max(l2_weight, 0), 1)
 
-        kl_weight = float(train_step - self.hps['kl_start_step']) / float(self.hps['kl_increase_steps'])
+        kl_weight = float(train_step - self.hps['kl_start_step'] + 1) / float(self.hps['kl_increase_steps'])
         # clip to 0-1
         kl_weight = min(max(kl_weight, 0.0), 1.0)
 
@@ -1004,6 +1009,7 @@ class LFADS(object):
 
         # epoch counter
         nepoch = 0
+        nepoch_cnt = 0
         lve_epoch = 0
 
         num_save_checkpoint = 1     # save checkpoints every num_save_checkpoint steps
@@ -1034,7 +1040,7 @@ class LFADS(object):
                kl_weight))
         # pre-load the lve checkpoint (used in case of loaded checkpoint)
 
-        if hps['checkpoint_pb_load_name'] == 'checkpoint_lve':
+        if target_num_epochs is not None and hps['checkpoint_pb_load_name'] == 'checkpoint_lve':
             self.lve = valid_set_heldin_samp_cost
         else:
             self.lve = np.inf
@@ -1055,9 +1061,9 @@ class LFADS(object):
                     self.printlog("Learning rate criteria met")
                     break
             else:
-                if nepoch == target_num_epochs:  # nepoch starts at 0
+                if nepoch_cnt == target_num_epochs:  # nepoch starts at 0
                     self.printlog("Num epoch criteria met. "
-                          "Completed {} epochs.".format(nepoch))
+                          "Completed {} epochs.".format(nepoch_cnt))
                     break
 
             do_save_ckpt = True if nepoch % num_save_checkpoint == 0 else False
@@ -1095,7 +1101,7 @@ class LFADS(object):
                                  l2_weight=l2_weight)
 
             epoch_time = time.time() - start_time
-            self.printlog("Elapsed time: %f" %epoch_time)
+            self.printlog("Elapsed time: %.2f" % epoch_time)
 
             if np.isnan(tr_total_cost) or np.isnan(val_total_cost):
                 self.printlog('Nan found in training or validation cost evaluation. Training stopped!')
@@ -1180,7 +1186,7 @@ class LFADS(object):
                        tr_kl_cost, val_kl_cost, l2_cost, kl_weight, l2_weight,
                        all_train_R2_heldin, all_train_R2_heldout, all_valid_R2_heldin, all_valid_R2_heldout,))
 
-            is_lve = smth_trial_val_recn_cost < self.lve
+            is_lve = smth_trial_val_recn_cost < self.lve and (kl_weight == 1. and l2_weight == 1.)
 
             # Making parameters available for lfads_wrappper
             if hps['checkpoint_pb_load_name'] == 'checkpoint_lve':
@@ -1243,22 +1249,28 @@ class LFADS(object):
             #if n_lr > 0 and len(valid_costs) > n_lr and (valid_cost_to_use > max(valid_costs[-n_lr:])):
             #    self.printlog("Decreasing learning rate")
             #    self.run_learning_rate_decay_opt()
-            if n_lr > 0 and len(valid_costs) > n_lr and (valid_cost_to_use > max(valid_costs[-n_lr:])):
-                self.run_learning_rate_decay_opt()
-                lr = session.run( self.learning_rate )
-                self.printlog("Decreasing learning rate to ", lr)
-                valid_costs.append(np.inf)
 
-            # early stopping when no improvement of validation cost for 3*n_lr
-            #if len(valid_costs) > n_lr*3 and valid_cost_to_use > np.max(valid_costs[-n_lr*3:]):
-            if n_lr > 0 and nepoch - lve_epoch > 3*n_lr:
-                self.printlog("No improvement on the validation cost! Stopping the training!")
-                break
+            # MRK, only decrease the LR/early stop if we are done ramping the weights
+            if kl_weight == 1. and l2_weight == 1.:
+                if n_lr > 0 and len(valid_costs) > n_lr and (valid_cost_to_use > max(valid_costs[-n_lr:])):
+                    self.run_learning_rate_decay_opt()
+                    lr = session.run( self.learning_rate )
+                    self.printlog("Decreasing learning rate to ", lr)
+                    valid_costs.append(np.inf)
 
-            valid_costs.append(valid_cost_to_use)
-            #train_costs.append(tr_total_cost)
+                nepoch_cnt += 1
 
+                # early stopping when no improvement of validation cost for 3*n_lr
+                #if len(valid_costs) > n_lr*3 and valid_cost_to_use > np.max(valid_costs[-n_lr*3:]):
+                if n_lr > 0 and nepoch - lve_epoch > hps['n_epochs_early_stop'] + 1:
+                    self.printlog("No improvement on the validation cost! Stopping the training!")
+                    break
+
+                valid_costs.append(valid_cost_to_use)
+                #train_costs.append(tr_total_cost)
             nepoch += 1
+
+            
 
 
     def eval_model_runs_batch(self, data_name, data_bxtxd, ext_input_bxtxi,
@@ -1366,7 +1378,8 @@ class LFADS(object):
         # choose E_to_process trials from the data
         data_bxtxd = data_extxd[0:E_to_process]
         for rep in range(pm_batch_size):
-            printer("Running repetitions %d of %d." % (rep + 1, pm_batch_size))
+            #printer("Running repetitions %d of %d." % (rep + 1, pm_batch_size))
+            self.printlog("Running repetitions %d of %d." % (rep + 1, pm_batch_size))
             #self.printlog("Running %d of %d." % (es_idx+1, E_to_process))
             #example_idxs = es_idx * np.ones(batch_size, dtype=np.int32)
             # run the model

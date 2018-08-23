@@ -40,6 +40,7 @@ LEARNING_RATE_INIT = 0.01
 LEARNING_RATE_DECAY_FACTOR = 0.95
 LEARNING_RATE_STOP = 0.00001
 LEARNING_RATE_N_TO_COMPARE = 6
+N_EPOCHS_EARLY_STOP = 30
 DO_RESET_LEARNING_RATE = False
 
 # flag to only allow training of the encoder (i.e., lock the generator, factors readout, rates readout, controller, etc weights)
@@ -291,6 +292,10 @@ flags.DEFINE_float("learning_rate_stop", LEARNING_RATE_STOP,
 flags.DEFINE_integer("learning_rate_n_to_compare", LEARNING_RATE_N_TO_COMPARE,
                      "Number of previous costs current cost has to be worse \
                      than, to lower learning rate.")
+flags.DEFINE_integer("n_epochs_early_stop", N_EPOCHS_EARLY_STOP,
+                     "Number of previous costs current cost has to be worse \
+                     than, to lower learning rate.")
+
 flags.DEFINE_boolean("do_reset_learning_rate", DO_RESET_LEARNING_RATE,
                      "Reset the learning rate to initial value.")
 
@@ -521,6 +526,7 @@ def build_hyperparameter_dict(flags):
   d['learning_rate_decay_factor'] = flags.learning_rate_decay_factor
   d['learning_rate_stop'] = flags.learning_rate_stop
   d['learning_rate_n_to_compare'] = flags.learning_rate_n_to_compare
+  d['n_epochs_early_stop'] = flags.n_epochs_early_stop
   d['do_reset_learning_rate'] = flags.do_reset_learning_rate
   d['max_grad_norm'] = flags.max_grad_norm
   d['cell_clip_value'] = flags.cell_clip_value

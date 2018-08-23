@@ -1,20 +1,8 @@
-import numpy as np
 import tensorflow as tf
-import os
-
-from helper_funcs import linear2, linear, kind_dict
+from tensorflow.python.ops.rnn_cell_impl import LayerRNNCell
+from helper_funcs import linear, kind_dict
 from helper_funcs import DiagonalGaussianFromExisting
 
-import collections
-import hashlib
-import numbers
-
-
-from tensorflow.python.ops import nn_ops
-from tensorflow.python.ops import array_ops
-from tensorflow.python.ops import init_ops
-from tensorflow.python.ops import math_ops
-from tensorflow.python.ops.rnn_cell_impl import LayerRNNCell
 
 class GRUCell(LayerRNNCell):
   """Gated Recurrent Unit cell (cf. http://arxiv.org/abs/1406.1078).
