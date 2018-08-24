@@ -1,15 +1,13 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-
 import numpy as np
 import tensorflow as tf
 import os
-import h5py
-import json
 import sys
-import warnings
 import errno
+
+RAND_SEED = None
 
 def kind_dict_definition():
     # used in the graph's keep probability
@@ -51,49 +49,13 @@ def printer(data):
     sys.stdout.write("\r\x1b[K" + data.__str__())
     sys.stdout.flush()
 
-
-def write_data(data_fname, data_dict, use_json=False, compression=None):
-    """Write data in HDF5 format.
-
-    Args:
-      data_fname: The filename of teh file in which to write the data.
-      data_dict:  The dictionary of data to write. The keys are strings
-        and the values are numpy arrays.
-      use_json (optional): human readable format for simple items
-      compression (optional): The compression to use for h5py (disabled by
-        default because the library borks on scalars, otherwise try 'gzip').
-    """
-
-    dir_name = os.path.dirname(data_fname)
-    if not os.path.exists(dir_name):
-        os.makedirs(dir_name)
-
-    if use_json:
-        the_file = open(data_fname, 'w')
-        json.dump(data_dict, the_file)
-        the_file.close()
-    else:
-        try:
-            with h5py.File(data_fname, 'w') as hf:
-                for k, v in data_dict.items():
-                    clean_k = k.replace('/', '_')
-                    if clean_k is not k:
-                        print('Warning: saving variable with name: ', k, ' as ', clean_k)
-                    else:
-                        print('Saving variable with name: ', clean_k)
-                    hf.create_dataset(clean_k, data=v, compression=compression)
-        except IOError:
-            print("Cannot open %s for writing.", data_fname)
-            raise
-
-
 def init_linear_transform(in_size, out_size, name=None, collections=None, mat_init_value=None, bias_init_value=None, normalized=False, do_bias=True):
     # generic function (we use linear transforms in a lot of places)
     # initialize the weights of the linear transformation based on the size of the inputs
 
     # initialze with a random distribuion
     stddev = 1 / np.sqrt(float(in_size))
-    mat_init = tf.random_normal_initializer(0.0, stddev, dtype=tf.float32)
+    mat_init = tf.random_normal_initializer(0.0, stddev, dtype=tf.float32, seed=RAND_SEED)
 
     # weight matrix
     w_collections = [tf.GraphKeys.GLOBAL_VARIABLES, "norm-variables"]
@@ -124,21 +86,6 @@ def linear(x, out_size, name, collections=None, mat_init_value=None, bias_init_v
     W, b = init_linear_transform(in_size, out_size, name=name, collections=collections, mat_init_value=mat_init_value,
                                  bias_init_value=bias_init_value)
     return tf.matmul(x, W) + b
-
-
-def ListOfRandomBatches(num_trials, batch_size):
-    if num_trials <= batch_size:
-        warnings.warn("Your batch size is bigger than num_trials! Using single batch ...")
-        return [np.random.permutation(range(num_trials))]
-
-    random_order = np.random.permutation(range(num_trials))
-    even_num_of_batches = int(np.floor(num_trials / batch_size))
-    trials_to_keep = even_num_of_batches * batch_size
-    # if num_trials % batch_size != 0:
-    #    print("Warning: throwing out %i trials per epoch" % (num_trials-trials_to_keep) )
-    random_order = random_order[0:(trials_to_keep)]
-    batches = [random_order[i:i + batch_size] for i in range(0, len(random_order), batch_size)]
-    return batches
 
 
 class Gaussian(object):
@@ -203,7 +150,7 @@ class DiagonalGaussianFromExisting(Gaussian):
     def __init__(self, mean_bxn, logvar_bxn):
         self.mean_bxn = mean_bxn
         self.logvar_bxn = logvar_bxn
-        self.noise_bxn = tf.random_normal(tf.shape(self.logvar_bxn))
+        self.noise_bxn = tf.random_normal(tf.shape(self.logvar_bxn), seed=RAND_SEED)
 
 
 class LearnableDiagonalGaussian(Gaussian):
@@ -228,7 +175,7 @@ class LearnableDiagonalGaussian(Gaussian):
         print(self.mean_bxn)
         #
         self.logvar_bxn = tf.log(tf.zeros([batch_size] + z_size) + var)
-        self.noise_bxn = tf.random_normal(tf.shape(self.logvar_bxn))
+        self.noise_bxn = tf.random_normal(tf.shape(self.logvar_bxn), seed=RAND_SEED)
  
 
 class DiagonalGaussian(object):
@@ -248,7 +195,7 @@ class DiagonalGaussian(object):
     size__xz = [None, z_size]
     self.mean = mean            # bxn already
     self.logvar = logvar        # bxn already
-    self.noise = noise = tf.random_normal(tf.shape(logvar))
+    self.noise = noise = tf.random_normal(tf.shape(logvar), seed=RAND_SEED)
     self.sample = mean + tf.exp(0.5 * logvar) * noise
     mean.set_shape(size__xz)
     logvar.set_shape(size__xz)
@@ -282,7 +229,7 @@ class DiagonalGaussian(Gaussian):
     def __init__(self, z_size, name, var):
         self.mean_bxn = tf.zeros( z_size )
         self.logvar_bxn = tf.log( tf.zeros( z_size ) + var)
-        self.noise_bxn = tf.random_normal( tf.shape( self.logvar_bxn ) )
+        self.noise_bxn = tf.random_normal( tf.shape( self.logvar_bxn ), seed=RAND_SEED )
 
 # NOT USED
 class GaussianProcess:
@@ -415,12 +362,12 @@ class DiagonalGaussianFromInput(Gaussian):
         if var_min > 0.0:
             logvar_bxn = tf.log(tf.exp(logvar_bxn) + var_min)
         self.logvar_bxn = logvar_bxn
-        self.noise_bxn = tf.random_normal(tf.shape(self.logvar_bxn))
+        self.noise_bxn = tf.random_normal(tf.shape(self.logvar_bxn), seed=RAND_SEED)
 
 
 def makeInitialState(state_dim, batch_size, name):
     init_stddev = 1 / np.sqrt(float(state_dim))
-    init_initter = tf.random_normal_initializer(0.0, init_stddev, dtype=tf.float32)
+    init_initter = tf.random_normal_initializer(0.0, init_stddev, dtype=tf.float32, seed=RAND_SEED)
     init_state = tf.get_variable(name + '_init_state', [1, state_dim],
                                  initializer=init_initter,
                                  dtype=tf.float32, trainable=True)
@@ -435,7 +382,7 @@ class LinearTimeVarying(object):
     # self.output = linear transform
     # self.output_nl = nonlinear transform
 
-    def __init__(self, inputs, output_size, transform_name, output_name, nonlinearity=None,
+    def __init__(self, inputs, output_size, transform_name, output_name=None, nonlinearity=None,
                  collections=None, W=None, b=None, normalized=False, do_bias=True):
         num_timesteps = tf.shape(inputs)[1]
         # must return "as_list" to get ints
@@ -460,11 +407,8 @@ class LinearTimeVarying(object):
         # initial_outputs_nl = tf.TensorArray(dtype=tf.float32, size=num_timesteps, name='init_nl_outputs')
 
         # MRK: replaced tf.while_loop with a simple tf.matmul
-        tiled_W = tf.tile(W, [1, tf.shape(inputs)[0]])
-        tiled_W = tf.reshape(tiled_W, [-1, W.get_shape()[0], W.get_shape()[1]])
-
-        tiled_b = tf.tile(b, [1, tf.shape(inputs)[0]])
-        tiled_b = tf.reshape(tiled_b, [-1, b.get_shape()[0], b.get_shape()[1]])
+        tiled_W = tf.tile(tf.expand_dims(W, 0), [tf.shape(inputs)[0], 1, 1])
+        tiled_b = tf.tile(tf.expand_dims(b, 0), [tf.shape(inputs)[0], 1, 1])
         output = tf.matmul(inputs, tiled_W) + tiled_b
         if nonlinearity is 'exp':
             output_nl = tf.exp(output)

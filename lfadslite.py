@@ -1,34 +1,24 @@
 from __future__ import print_function
 import tensorflow as tf
 import numpy as np
-import sys
-import time
 import os
 import re
 import logging
-import json
-import shlex
-#import random
-#import matplotlib.pyplot as plt
 import subprocess
-
 from helper_funcs import linear, makeInitialState
 from helper_funcs import kind_dict, kind_dict_key
 from helper_funcs import DiagonalGaussianFromInput, DiagonalGaussian
 from helper_funcs import DiagonalGaussianFromExisting, LearnableDiagonalGaussian, diag_gaussian_log_likelihood
 from helper_funcs import LinearTimeVarying
 from helper_funcs import KLCost_GaussianGaussian
-from helper_funcs import write_data
+from data_funcs import write_data
 from helper_funcs import printer, mkdir_p
-#from plot_funcs import plot_data, close_all_plots
-#from data_funcs import read_datasets
 from customcells import ComplexCell
 from rnn_helper_funcs import BidirectionalDynamicRNN, DynamicRNN
 from helper_funcs import dropout
 # TPU related imports
-#from tensorflow.contrib import tpu
 from tensorflow.contrib.tpu.python.tpu import tpu_estimator
-#from tensorflow.contrib.cluster_resolver import TPUClusterResolver
+
 
 
 
@@ -116,13 +106,15 @@ class TrainHook(tf.train.SessionRunHook):
 # todo, saveing/loading lve checkpoint
 # todo, pass the RunConfig setting as params to train
 
+
 class LFADS(object):
     def __init__(self, hps, datasets):
         # store the hps
         print(hps)
-        hps['n_epochs_eval'] = 1
         self.datasets = datasets
-        self.setup_stdout_logger(hps)
+        print(hps.lfads_save_dir)
+        self.printlog = print
+        #self.setup_stdout_logger(hps)
         if hps['device'].lower() == 'tpu':
             hps['use_tpu'] = True
         else:
@@ -157,7 +149,6 @@ class LFADS(object):
                     data_mode = np.ones([data_dict['train_data'].shape[0],1], dtype=np.float32)
                     print(name)
                     name = np.repeat(np.array(name, dtype=np.str), data_dict['train_data'].shape[0])
-                    print(name.shape)
                     in_data = {'data':data_dict['train_data'].astype(np.float32),
                                'data_name':name,
                                'data_mode':data_mode}
@@ -180,62 +171,77 @@ class LFADS(object):
                                                               num_threads=1)
         return input_fn
 
-    def data_fn(self, mode, data_type):
+    def data_fn(self, mode, data_type, n_repeats=1):
+
+      datasets = self.datasets
+
+      dataset = {}
+      for name, data_dict in datasets.items():
+        # reading the data from numpy array and preparing tf.Dataset
+        if data_type == 'train':
+            data = data_dict['train_data']
+            data_cv_mask = data_dict['train_data_cvmask']
+            data_ext_input = data_dict['train_ext_input']
+            data_truth = data_dict['train_truth']
+        else:
+            data = data_dict['valid_data']
+            data_cv_mask = data_dict['valid_data_cvmask']
+            data_ext_input = data_dict['valid_ext_input']
+            data_truth = data_dict['valid_truth']
+
+        # preparing the dict to pass to tf.Dataset
+        data_d = {'data': data.astype(np.float32)}
+        if data_cv_mask is not None:
+            data_d['data_cv_mask'] = data_cv_mask.astype(np.float32)
+        if data_ext_input is not None:
+            data_d['data_ext_input'] = data_ext_input.astype(np.float32)
+        if data_truth is not None:
+            data_d['data_truth'] = data_truth.astype(np.float32)
+
 
       def input_fn(params):
         # TODO: adapt this for multiple sessions
         # constructing Datasets using tf.data
         batch_size = params['batch_size']
         # datasets are already loaded at init
-        datasets = self.datasets
 
-        dataset = {}
-        for name, data_dict in datasets.items():
-            # reading the data from numpy array and preparing tf.Dataset
-            if data_type == 'train':
-                data = data_dict['train_data']
-                data_cv_mask = data_dict['train_data_cvmask']
-                data_ext_input = data_dict['train_ext_input']
-                data_truth = data_dict['train_truth']
-            else:
-                data = data_dict['valid_data']
-                data_cv_mask = data_dict['valid_data_cvmask']
-                data_ext_input = data_dict['valid_ext_input']
-                data_truth = data_dict['valid_truth']
-            
-            # preparing the dict to pass to tf.Dataset
-            data_d = {'data':data.astype(np.float32)}
-            if data_cv_mask is not None:
-                data_d['data_cv_mask'] = data_cv_mask.astype(np.float32)
-            if data_ext_input is not None:
-                data_d['data_ext_input'] = data_ext_input.astype(np.float32)
-            if data_truth is not None:
-                data_d['data_truth'] = data_truth.astype(np.float32)
+        #data_mode = np.ones([data.shape[0],1], dtype=np.float32)
+        #data_d['data_mode']:data_mode
+        # the index of the dataset for multi-session case
+        ceil_datasize = batch_size*int(np.ceil(data.shape[0]/np.float(batch_size)))
+        data_name = np.repeat(np.array(0, dtype=np.float32), data.shape[0])
+        data_d['data_name'] = data_name
+        if mode == tf.estimator.ModeKeys.PREDICT:
+            for k in data_d.keys():
+                # pad the data to have full last batch
+                data_d[k] = np.pad(data_d[k], ((0, ceil_datasize - data_d[k].shape[0]),) + (len(data_d[k].shape) - 1)*((0,0),), 'constant')
 
-            #data_mode = np.ones([data.shape[0],1], dtype=np.float32)
-            #data_d['data_mode']:data_mode
-            # the index of the dataset for multi-session case
-            data_name = np.repeat(np.array(0, dtype=np.float32), data.shape[0])
-            data_d['data_name'] = data_name
+        dataset = tf.data.Dataset.from_tensor_slices(data_d)
 
-            dataset[name] = tf.data.Dataset.from_tensor_slices(data_d)
-            dataset[name] = dataset[name].cache()
-        
-            if mode == tf.estimator.ModeKeys.TRAIN:
-                # shuffle when training
-                dataset[name] = dataset[name].shuffle(buffer_size=batch_size*5)
+        if mode == tf.estimator.ModeKeys.TRAIN:
+            # shuffle when training
+            dataset = dataset.shuffle(buffer_size=100000)
+            _n_repeats = None
+        else:
+            _n_repeats = n_repeats
 
-            dataset[name] = dataset[name].repeat()
-            dataset[name].prefetch(batch_size)
-            dataset[name] = dataset[name].apply(tf.contrib.data.batch_and_drop_remainder(batch_size))
+        #bs = {}
+        #for k in data_d.keys():
+        #    bs[k] = [[ceil_datasize] ] + [[None]]*len(data_d[k].shape[1:])
 
-        self.dname = name
-        return dataset[name]
-      
-      return input_fn
+        dataset.prefetch(batch_size)
+        dataset = dataset.batch(batch_size, drop_remainder=True)
+        #dataset[name] = dataset[name].padded_batch(batch_size, bs )
+        dataset = dataset.cache()
+        dataset = dataset.repeat(_n_repeats)
+
+        return dataset
+
+      self.dname = name
+      num_trials = data.shape[0]
+      return input_fn, num_trials
 
     def lfads_model_fn(self, features, mode, params):
-        
         # to stop certain gradients paths through the graph in backprop
         def entry_stop_gradients(target, mask):
             mask_h = tf.abs(1. - mask)
@@ -262,8 +268,7 @@ class LFADS(object):
         
         #dataName = tf.convert_to_tensor(self.dname)#features['data_name']
 
-
-        run_type = kind_dict("train")
+        run_type = hps['kind']
 
         # only when training do
         if mode == tf.estimator.ModeKeys.TRAIN:
@@ -473,8 +478,10 @@ class LFADS(object):
 
         # to go forward, either sample from the posterior, or take mean
         if run_type in [kind_dict("train"), kind_dict("posterior_sample_and_average")]:
+            print('Sampling from Posterior')
             gen_ics_lowd = gen_ics_posterior.sample()
         else:
+            print('Passing the Posterior mean')
             gen_ics_lowd = gen_ics_posterior.mean
         
         with tf.variable_scope('generator'):
@@ -488,7 +495,6 @@ class LFADS(object):
         ### CONTROLLER construction
         # this should only be done if a controller is requested
         # if not, skip all these graph elements like so:
-        print('TEST1', input_to_encoders.get_shape())
         if hps['co_dim'] == 0:
             with tf.variable_scope('generator'):
                 # setup generator
@@ -748,7 +754,6 @@ class LFADS(object):
         else:
             grad_binary_mask = cv_binary_mask
 
-        print('Test2', logrates.get_shape())
         # block gradients for coordinated dropout and cross-validation
         if hps['output_dist'].lower() == 'poisson':
             masked_logrates = entry_stop_gradients(logrates, grad_binary_mask)
@@ -760,7 +765,6 @@ class LFADS(object):
             loglikelihood_b_t = diag_gaussian_log_likelihood(dataset_ph,
                                                                   masked_output_mean, masked_output_logvar)
 
-        print('Test3', loglikelihood_b_t.get_shape())
         # cost for each trial
 
         # log_p_b_train =  (1. / cv_keep_ratio)**2 * tf.reduce_mean(
@@ -770,8 +774,11 @@ class LFADS(object):
         # rec_cost_train = -log_p_train
         # ones_ratio = tf.reduce_mean(cv_binary_mask)
 
+        # MRK, debugging
+        #rec_cost_heldin_samps = - tf.reduce_mean(loglikelihood_b_t)
         rec_cost_heldin_samps = - (1. / cv_keep_ratio) * \
                               tf.reduce_sum(loglikelihood_b_t * cv_binary_mask)/ tf.cast(batch_size, tf.float32)
+
         # rec_cost_heldin_samps = - tf.reduce_sum(loglikelihood_b_t * cv_binary_mask) / batch_size
         # rec_cost_train /= ones_ratio
 
@@ -821,7 +828,7 @@ class LFADS(object):
             l2_cost = tf.add_n(l2_costs) / tf.add_n(l2_numels)
 
         ## calculate total training cost
-        total_cost = l2_cost + kl_cost + rec_cost_heldin_samps
+        total_cost = rec_cost_heldin_samps #+ l2_cost + kl_cost
 
         # get the list of trainable variables
         trainable_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
@@ -830,31 +837,31 @@ class LFADS(object):
             regex = re.compile('.+_in_fac_linear.+')
             trainable_vars = [i for i in trainable_vars if not regex.search(i.name)]
 
-        gradients = tf.gradients(total_cost, trainable_vars)
-        gradients, grad_global_norm = tf.clip_by_global_norm(gradients, hps['max_grad_norm'])
+        #gradients = tf.gradients(total_cost, trainable_vars)
+        #gradients, grad_global_norm = tf.clip_by_global_norm(gradients, hps['max_grad_norm'])
         # this is the optimizer
         opt = tf.train.AdamOptimizer(learning_rate, beta1=0.9, beta2=0.999, epsilon=1e-01)
 
         if self.use_tpu:
-            opt = tf.contrib.tpu.CrossShardOptimizer(opt)
+            opt = tf.contrib.tpu.CrossShardOptimizer(opt)#, reduction=tf.losses.Reduction.SUM)
 
         global_step = tf.train.get_global_step()
-        #train_op = opt.minimize(total_cost, global_step=global_step)
-        train_op = opt.apply_gradients(
-            zip(gradients, trainable_vars), global_step=global_step)
+        train_op = opt.minimize(total_cost, global_step=global_step)
+        #train_op = opt.apply_gradients(
+        #    zip(gradients, trainable_vars), global_step=global_step)
 
         # print Costs
         # total_cost = tf.self.printlog(total_cost, [tf.train.get_global_step(), total_cost, rec_cost_train])
 
         # Set logging hook for tf.estimator
-        logging_hook = tf.train.LoggingTensorHook({'step': global_step,
-                                                   'train_total': total_cost,
-                                                   'train_recon_heldin_samps': rec_cost_heldin_samps,
-                                                   'train_recon_heldout_samps': rec_cost_heldout_samps,
-                                                   'l2_cost': l2_cost,
-                                                   'kl_cost': kl_cost,
-                                                   },
-                                                  every_n_iter=1)
+        #logging_hook = tf.train.LoggingTensorHook({'step': global_step,
+        #                                           'train_total': total_cost,
+        #                                           'train_recon_heldin_samps': rec_cost_heldin_samps,
+        #                                           'train_recon_heldout_samps': rec_cost_heldout_samps,
+        #                                           'l2_cost': l2_cost,
+        #                                           'kl_cost': kl_cost,
+        #                                           },
+        #                                          every_n_iter=1)
         # metric for eval
         #eval_metric_ops = {
         #    'eval_data_mode': tf.metrics.mean(data_mode),
@@ -862,7 +869,6 @@ class LFADS(object):
         #    'eval_recon_heldout_samps': tf.metrics.mean(rec_cost_heldout_samps),
         #    'eval_total': tf.metrics.mean(total_cost),
         #}
-        print(loglikelihood_b_t.get_shape())        
         metric_rec_cost_heldin_samps = - (1. / cv_keep_ratio) * \
                                        tf.reduce_sum(tf.reduce_sum(loglikelihood_b_t * cv_binary_mask, axis=1),axis=1)
 
@@ -935,44 +941,42 @@ class LFADS(object):
         tf.logging.set_verbosity(tf.logging.INFO)
         self.setup_stdout_logger(hps)
         self.setup_tf_logger(hps)
+
         config = tf.ConfigProto(allow_soft_placement=True,
                                 log_device_placement=True)
-        hps['n_epochs_eval'] = 10
-        # maximum 100 iterations per loop (can change to num_steps later but need testing)
+        # TPU config
         iterations_per_loop = min(num_steps, 100)
         run_config = tf.contrib.tpu.RunConfig(
-            save_checkpoints_steps=500,
+            save_checkpoints_steps=100,
             cluster=self.tpu_cluster_resolver,
-            #master=self.master,
-            #evaluation_master=self.master,
             keep_checkpoint_max=hps['max_ckpt_to_keep'],
-            #tf_random_seed=19830610,
-            # TODO, MRK, need to fix the model_dir and the log dir
-            model_dir = 'gs://pbt-test-bucket/runs',#'file:/' + hps['lfads_save_dir'],
-            #model_dir=hps['lfads_save_dir'],
+            model_dir=hps['lfads_save_dir'],
             session_config=config,
-            tpu_config=tf.contrib.tpu.TPUConfig(iterations_per_loop=iterations_per_loop),
+            tpu_config=tf.contrib.tpu.TPUConfig(iterations_per_loop=iterations_per_loop,)
         )
+
+        # creating the input pipeline
+        train_input, _ = self.data_fn(tf.estimator.ModeKeys.TRAIN, data_type='train')
+        eval_input_train, num_trials_train = self.data_fn(tf.estimator.ModeKeys.EVAL, data_type='train')
+        eval_input_valid, num_trials_valid = self.data_fn(tf.estimator.ModeKeys.EVAL, data_type='valid')
+
+        # Steps required for evaluation on the whole data
         eval_batch_size = params['eval_batch_size']
+        eval_steps_train = -(-num_trials_train // eval_batch_size)  # divide with ceil
+        eval_steps_valid = -(-num_trials_valid // eval_batch_size)
+
+        # create the TPU estimator
+        lfads = tf.contrib.tpu.TPUEstimator(model_fn=self.lfads_model_fn, params=params, config=run_config,
+                                            use_tpu=self.use_tpu, train_batch_size=params['train_batch_size'],
+                                            eval_batch_size=eval_batch_size)
 
         if run_mode.lower() == 'pbt':
             assert num_steps, 'You must specify max_epochs when run_mode is PBT!'
-            train_input = self.data_fn(tf.estimator.ModeKeys.TRAIN, data_type='train')
-            eval_input_train =  self.data_fn(tf.estimator.ModeKeys.EVAL, data_type='train')
-            eval_input_valid = self.data_fn(tf.estimator.ModeKeys.EVAL, data_type='valid')
-            lfads = tf.contrib.tpu.TPUEstimator(model_fn=self.lfads_model_fn, params=params, config=run_config,
-                use_tpu=self.use_tpu, train_batch_size=params['train_batch_size'], eval_batch_size=eval_batch_size,
-                predict_batch_size=params['train_batch_size'],)
-            #lr = None #self.learning_rate if hps['do_reset_learning_rate'] else None
-            #train_hook = TrainHook(lr)
-            #, hooks = [train_hook]
+            # Train the model
             lfads.train(train_input, steps=num_steps)
-            # TODO, MRK, calcualtes the steps for evaluation through the data once
-            train_costs = lfads.evaluate(eval_input_train, name='train_data', steps=2)
-            valid_costs = lfads.evaluate(eval_input_valid, name='valid_data', steps=2)
-
-            self.printlog('Training costs:', train_costs)
-            self.printlog('Validation costs:', valid_costs)
+            # Evaluate
+            train_costs = lfads.evaluate(eval_input_train, name='train_data', steps=eval_steps_train)
+            valid_costs = lfads.evaluate(eval_input_valid, name='valid_data', steps=eval_steps_valid)
 
             # Making parameters available for lfads_wrappper
             if hps['checkpoint_pb_load_name'] == 'checkpoint_lve':
@@ -982,210 +986,87 @@ class LFADS(object):
                 #    self.trial_recon_cost = smth_trial_val_recn_cost
                 #    self.samp_recon_cost = smth_samp_val_recn_cost
             else:
+                pass
                 self.trial_recon_cost = valid_costs['eval_recon_heldin_samps']
                 self.samp_recon_cost = train_costs['eval_recon_heldout_samps']
         else:
-            # MRK, this part has not been tested nor developed for the time being
-            train_input = self.data_fn(tf.estimator.ModeKeys.TRAIN, data_type='train')
-            eval_input_train =  self.data_fn(tf.estimator.ModeKeys.EVAL, data_type='train')
-            eval_input_valid = self.data_fn(tf.estimator.ModeKeys.EVAL, data_type='valid')
-            lfads = tf.contrib.tpu.TPUEstimator(model_fn=self.lfads_model_fn, config=run_config,
-                use_tpu=self.use_tpu, train_batch_size=params['train_batch_size'], eval_batch_size=eval_batch_size)
-            #lfads = tf.estimator.Estimator(model_fn=self.lfads_model_fn, params=hps, config=run_config)
-            train_spec = tf.estimator.TrainSpec(train_input, max_steps=num_steps)
-            eval_spec = tf.estimator.EvalSpec(eval_input_train,
-                                              #start_delay_secs=10,
-                                              steps=1,
-                                              #throttle_secs = 50
-                                              )
-                                              #exporters=[exporter],
-                                              #name='census-eval')
+            # Standard run
+            #train_spec = tf.estimator.TrainSpec(train_input, max_steps=num_steps)
+            #eval_spec = tf.estimator.EvalSpec(eval_input_train, steps=eval_steps_valid)
+            #tf.estimator.train_and_evaluate(lfads, train_spec, eval_spec)
+            lfads.train(train_input, max_steps=hps['max_steps'])
+            # Evaluate
+            #train_costs = lfads.evaluate(eval_input_train, name='train_data', steps=eval_steps_train)
+            #valid_costs = lfads.evaluate(eval_input_valid, name='valid_data', steps=eval_steps_valid)
+            # Do Posterior Sampling and write the predictions
+            hps.kind = kind_dict("posterior_sample_and_average")
+            self.write_model_runs(hps, self.datasets)
 
-            tf.estimator.train_and_evaluate(lfads, train_spec, eval_spec)
-            #tf.estimator
-        #lfads.train(input_fn=data_fn)
-        #eval_out = lfads.evaluate(input_fn=data_fn, steps=1)
-        #self.printlog(eval_out)
-        #pred_out = lfads.predict(input_fn=data_fn)
-        #self.printlog(pred_out['output_dist_params'])
+    def predict_model(self, data_name, data_kind, hps, ps_repetitions=None, use_sample_mean=False):
+        # run the model for inference after training
 
+        if ps_repetitions is None:
+            ps_repetitions = hps['ps_repetitions']
+        print("Running Posterior Sampling for %d repetitions." % ps_repetitions)
 
+        params = {}
+        for key, value in hps.iteritems():
+            params[key] = value
+        tf.logging.set_verbosity(tf.logging.INFO)
+        #self.setup_stdout_logger(hps)
+        #self.setup_tf_logger(hps)
+        config = tf.ConfigProto(allow_soft_placement=True,
+                                log_device_placement=True)
+        iterations_per_loop = 100
+        run_config = tf.contrib.tpu.RunConfig(
+            cluster=self.tpu_cluster_resolver,
+            # TODO, MRK, need to fix the model_dir and the log dir
+            model_dir = hps['lfads_save_dir'],
+            session_config=config,
+            tpu_config=tf.contrib.tpu.TPUConfig(iterations_per_loop=iterations_per_loop)
+        )
 
-    def eval_model_runs_batch(self, data_name, data_bxtxd,
-                              do_eval_cost=False, do_average_batch=False):
-        """Returns all the goodies for the entire model, per batch.
+        pred_input_train, num_trials_train = self.data_fn(tf.estimator.ModeKeys.PREDICT,
+                                                          n_repeats=ps_repetitions,
+                                                          data_type=data_kind)
 
-        Args:
-          data_name: The name of the data dict, to select which in/out matrices
-            to use.
-          data_bxtxd:  Numpy array training data with shape:
-            batch_size x # time steps x # dimensions
-          ext_input_bxtxi: Numpy array training external input with shape:
-            batch_size x # time steps x # external input dims
-          do_eval_cost (optional): If true, the IWAE (Importance Weighted
-             Autoencoder) log likeihood bound, instead of the VAE version.
-          do_average_batch (optional): average over the batch, useful for getting
-          good IWAE costs, and model outputs for a single data point.
+        pred_batch_size = params['eval_batch_size']
+        # if using the sample means only do one repetition
+        if use_sample_mean:
+            params['kind'] = kind_dict("posterior_mean")
+            ps_repetitions = 1
 
-        Returns:
-          A dictionary with the outputs of the model decoder, namely:
-            prior g0 mean, prior g0 variance, approx. posterior mean, approx
-            posterior mean, the generator initial conditions, the control inputs (if
-            enabled), the state of the generator, the factors, and the rates.
-        """
-        session = tf.get_default_session()
-        # kl_ic_weight and kl_co_weight do not matter for posterior sample and average
-        if do_average_batch:
-            run_type = kind_dict('posterior_mean')
-        else:
-            run_type = kind_dict('posterior_sample_and_average')
+        lfads = tf.contrib.tpu.TPUEstimator(model_fn=self.lfads_model_fn, params=params, config=run_config,
+            use_tpu=self.use_tpu, train_batch_size=params['train_batch_size'], predict_batch_size=pred_batch_size,)
 
-        feed_dict = self.build_feed_dict(data_name, data_bxtxd, run_type=run_type,
-                                         keep_prob=1.0, keep_ratio=1.0)
-        # Non-temporal signals will be batch x dim.
-        # Temporal signals are list length T with elements batch x dim.
-        tf_vals = [self.gen_ics, self.gen_states, self.factors,
-                   self.output_dist_params]
-        if self.hps.ic_dim > 0:
-          tf_vals += [self.prior_zs_g0.mean, self.prior_zs_g0.logvar,
-                      self.posterior_zs_g0.mean, self.posterior_zs_g0.logvar]
-        if self.hps.co_dim > 0:
-          tf_vals.append(self.controller_outputs)
+        # run the graph for prediction
+        preds = lfads.predict(pred_input_train)
 
-        # flatten for sending into session.run
-        np_vals_flat = session.run(tf_vals, feed_dict=feed_dict)
-        return np_vals_flat
-    #        tf_vals_flat, fidxs = flatten(tf_vals)
-
-
-    # this does the bulk of posterior sample & mean
-    def eval_model_runs_avg_epoch(self, data_name, data_extxd, pm_batch_size=None,
-                                  do_average_batch=False):
-        """Returns all the expected value for goodies for the entire model.
-
-        The expected value is taken over hidden (z) variables, namely the initial
-        conditions and the control inputs.  The expected value is approximate, and
-        accomplished via sampling (batch_size) samples for every examples.
-
-        Args:
-          data_name: The name of the data dict, to select which in/out matrices
-            to use.
-          data_extxd:  Numpy array training data with shape:
-            # examples x # time steps x # dimensions
-#          ext_input_extxi (optional): Numpy array training external input with
-#            shape: # examples x # time steps x # external input dims
-
-        Returns:
-          A dictionary with the averaged outputs of the model decoder, namely:
-            prior g0 mean, prior g0 variance, approx. posterior mean, approx
-            posterior mean, the generator initial conditions, the control inputs (if
-            enabled), the state of the generator, the factors, and the output
-            distribution parameters, e.g. (rates or mean and variances).
-        """
-        hps = self.hps
-        batch_size = hps.batch_size
-        if pm_batch_size is None:
-            pm_batch_size = batch_size
-        E, T, D  = data_extxd.shape
-        E_to_process = hps.ps_nexamples_to_process
-        if E_to_process > E:
-          self.printlog("Setting number of posterior samples to process to : %d" % E)
-          E_to_process = E
-
-        # make a bunch of placeholders to store the posterior sample means
-        gen_ics = np.array([]) # np.zeros([E_to_process, hps.gen_dim])
-        gen_states = np.array([]) #np.zeros([E_to_process, T, hps.gen_dim])
-        factors = np.array([]) #np.zeros([E_to_process, T, hps.factors_dim])
-        out_dist_params = np.array([]) #np.zeros([E_to_process, T, D])
-        if hps.ic_dim > 0:
-            prior_g0_mean = np.array([]) #np.zeros([E_to_process, hps.ic_dim])
-            prior_g0_logvar = np.array([]) #np.zeros([E_to_process, hps.ic_dim])
-            post_g0_mean = np.array([]) #np.zeros([E_to_process, hps.ic_dim])
-            post_g0_logvar = np.array([]) #np.zeros([E_to_process, hps.ic_dim])
-
-        if hps.co_dim > 0:
-            controller_outputs = np.array([]) #np.zeros([E_to_process, T, hps.co_dim])
-
-        #costs = np.zeros(E_to_process)
-        #nll_bound_vaes = np.zeros(E_to_process)
-        #nll_bound_iwaes = np.zeros(E_to_process)
-        #train_steps = np.zeros(E_to_process)
-        # MRK change the over of processing posterior samples
-        # batches are trials
-
-        # choose E_to_process trials from the data
-        data_bxtxd = data_extxd[0:E_to_process]
-        for rep in range(pm_batch_size):
-            printer("Running repetitions %d of %d." % (rep + 1, pm_batch_size))
-            #self.printlog("Running %d of %d." % (es_idx+1, E_to_process))
-            #example_idxs = es_idx * np.ones(batch_size, dtype=np.int32)
-            # run the model
-            mv = self.eval_model_runs_batch(data_name, data_bxtxd,
-                                            do_eval_cost=True,
-                                            do_average_batch=do_average_batch)
-            # assemble a dict from the returns
-            model_values = {}
-            # compile a list of variables "vars"
-            vars = ['gen_ics', 'gen_states', 'factors', 'output_dist_params']
-            if self.hps.ic_dim > 0:
-                vars.append('prior_g0_mean')
-                vars.append('prior_g0_logvar')
-                vars.append('post_g0_mean')
-                vars.append('post_g0_logvar')
-            if self.hps.co_dim > 0:
-                vars.append('controller_outputs')
-
-            # put returned variables that were on the "vars" list into a "model_values" dict
-            for idx in range( len(vars) ):
-                model_values[ vars[idx] ] = mv[idx] / pm_batch_size
-
-            # CP: the below used to append, and do a mean later
-            #   now switching to do the averaging in the loop to save memory
-
-            # assign values to the arrays
-            #  if it's the first go 'round:
-            if not gen_ics.size:
-                gen_ics = model_values['gen_ics']
-                gen_states = model_values['gen_states']
-                factors = model_values['factors']
-                out_dist_params = model_values['output_dist_params']
-                if self.hps.ic_dim > 0:
-                    prior_g0_mean = model_values['prior_g0_mean']
-                    prior_g0_logvar = model_values['prior_g0_logvar']
-                    post_g0_mean = model_values['post_g0_mean']
-                    post_g0_logvar = model_values['post_g0_logvar']
-                if self.hps.co_dim > 0:
-                    controller_outputs = model_values['controller_outputs']
-            else:
-                gen_ics = gen_ics + model_values['gen_ics']
-                gen_states = gen_states + model_values['gen_states']
-                factors = factors + model_values['factors']
-                out_dist_params = out_dist_params + model_values['output_dist_params']
-                if self.hps.ic_dim > 0:
-                    prior_g0_mean = prior_g0_mean + model_values['prior_g0_mean']
-                    prior_g0_logvar = prior_g0_logvar + model_values['prior_g0_logvar']
-                    post_g0_mean = post_g0_mean + model_values['post_g0_mean']
-                    post_g0_logvar = post_g0_logvar + model_values['post_g0_logvar']
-                if self.hps.co_dim > 0:
-                    controller_outputs = controller_outputs + model_values['controller_outputs']
-
-        self.printlog("")
+        num_trials = num_trials_train
+        # get the size of padded data size
+        ceil_datasize = pred_batch_size * int(np.ceil(num_trials / np.float(pred_batch_size)))
+        # holds the list of prediction samples
         model_runs = {}
-        model_runs['gen_ics'] = gen_ics
-        model_runs['gen_states'] = gen_states
-        model_runs['factors'] = factors
-        model_runs['output_dist_params'] = out_dist_params
-        if self.hps.ic_dim > 0:
-            model_runs['prior_g0_mean'] = prior_g0_mean
-            model_runs['prior_g0_logvar'] = prior_g0_logvar
-            model_runs['post_g0_mean'] = post_g0_mean
-            model_runs['post_g0_logvar'] = post_g0_logvar
+        # holds the averaged output
+        model_runs_array = {}
+        i = 0
+        # iterate through each predicted trial and
+        for p in preds:
+            i += 1
+            if i > ceil_datasize: i = 1
+            if i > num_trials: continue #ignore the padded samples
+            for k in p.keys():
+                if k not in model_runs:
+                    model_runs[k] = []
+                model_runs[k].append(p[k])
+            if i == num_trials:
+                for k in model_runs:
+                    if k not in model_runs_array: model_runs_array[k] = 0.
+                    tmp_array = np.array(model_runs[k])
+                    model_runs_array[k] += np.squeeze(np.reshape(tmp_array, (-1, num_trials,) + tmp_array.shape[1:]), 0) / ps_repetitions
+                model_runs = {}
 
-        if self.hps.co_dim > 0:
-            model_runs['controller_outputs'] = controller_outputs
-                                                   
-        # return the dict
-        return model_runs
+        return model_runs_array
 
     '''
     def get_R2(self, data_true, data_est, mask):
@@ -1211,7 +1092,7 @@ class LFADS(object):
 
     # this calls self.eval_model_runs_avg_epoch to get the posterior means
     # then it writes all the data to file
-    def write_model_runs(self, datasets, output_fname=None):
+    def write_model_runs(self, hps, datasets, output_fname=None):
         """Run the model on the data in data_dict, and save the computed values.
 
         LFADS generates a number of outputs for each examples, and these are all
@@ -1228,7 +1109,6 @@ class LFADS(object):
           datasets: a dictionary of named data_dictionaries, see top of lfads.py
           output_fname: a file name stem for the output files.
         """
-        hps = self.hps
         kind = kind_dict_key(hps.kind)
         all_model_runs = []
 
@@ -1242,7 +1122,7 @@ class LFADS(object):
               fname = output_fname + data_name + '_' + data_kind + '_' + kind
 
             self.printlog("Writing data for %s data and kind %s to file %s." % (data_name, data_kind, fname))
-            model_runs = self.eval_model_runs_avg_epoch(data_name, data_extxd)
+            model_runs = self.predict_model(data_name, data_kind, hps)
             all_model_runs.append(model_runs)
             full_fname = os.path.join(hps.lfads_save_dir, fname)
             write_data(full_fname, model_runs, compression='gzip')

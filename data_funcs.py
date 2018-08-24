@@ -1,11 +1,22 @@
 import os
 import h5py
 import json
-
 import numpy as np
-import tensorflow as tf
+import warnings
+#import tensorflow as tf
+#from tensorflow.python.lib.io import file_io
+#import __builtin__
 
 
+try:
+    from google.cloud import storage
+except ImportError:
+    warnings.warn("google.cloud library is not available, and hence not loaded! Assuming you are running locally!")
+    print("Use `sudo pip install google-cloud-storage` to install the library if you are running on the cloud!")
+
+
+#def gcp_open(name, mode='r'):
+#    return file_io.FileIO(name, mode=mode)
 
 def load_datasets(data_dir, data_filename_stem, hps):
   """Load the datasets from a specified directory.
@@ -106,6 +117,7 @@ def read_datasets(data_path, data_fname_stem):
                      "are correct?")
 
   print (str(len(dataset_dict)) + ' datasets loaded')
+
   return dataset_dict
 
 
@@ -122,18 +134,24 @@ def write_data(data_fname, data_dict, use_json=False, compression=None):
     compression (optional): The compression to use for h5py (disabled by
       default because the library borks on scalars, otherwise try 'gzip').
   """
-
-  dir_name = os.path.dirname(data_fname)
-  if not os.path.exists(dir_name):
-    os.makedirs(dir_name)
+  if 'gs://' in data_fname:
+    # using google cloud bucket
+    fparts = os.path.normpath(data_fname).split(os.sep)
+    bucket_name = fparts[1]
+    _data_fname = os.path.join('/tmp', fparts[-1])
+  else:
+    _data_fname = data_fname
+    dir_name = os.path.dirname(data_fname)
+    if not os.path.exists(dir_name):
+      os.makedirs(dir_name)
 
   if use_json:
-    the_file = open(data_fname,'w')
+    the_file = open(_data_fname,'w')
     json.dump(data_dict, the_file)
     the_file.close()
   else:
     try:
-      with h5py.File(data_fname, 'w') as hf:
+      with h5py.File(_data_fname, 'w') as hf:
         for k, v in data_dict.items():
           clean_k = k.replace('/', '_')
           if clean_k is not k:
@@ -142,8 +160,15 @@ def write_data(data_fname, data_dict, use_json=False, compression=None):
             print('Saving variable with name: ', clean_k)
           hf.create_dataset(clean_k, data=v, compression=compression)
     except IOError:
-      print("Cannot open %s for writing.", data_fname)
+      print("Cannot open %s for writing.", _data_fname)
       raise
+
+  if 'gs://' in data_fname:
+    # using google cloud bucket
+    upload_blob(bucket_name, _data_fname, os.path.join(*fparts[2:]))
+    os.remove(_data_fname)
+
+
 
 
 def clean_data_dict(data_dict):
@@ -163,3 +188,15 @@ def clean_data_dict(data_dict):
 
   return data_dict
 
+
+def upload_blob(bucket_name, source_file_name, destination_blob_name):
+    """Uploads a file to the bucket."""
+    storage_client = storage.Client()
+    bucket = storage_client.get_bucket(bucket_name)
+    blob = bucket.blob(destination_blob_name)
+
+    blob.upload_from_filename(source_file_name)
+
+    print('File {} uploaded to {}.'.format(
+        source_file_name,
+        destination_blob_name))

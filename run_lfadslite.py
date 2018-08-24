@@ -13,13 +13,15 @@ import data_funcs as utils
 from helper_funcs import kind_dict, kind_dict_key
 from data_funcs import load_datasets
 
+
+MAX_STEPS = 10000
 MAX_CKPT_TO_KEEP = 5
 MAX_CKPT_TO_KEEP_LVE = 5
 CSV_LOG = "fitlog"
 OUTPUT_FILENAME_STEM = ""
 CHECKPOINT_PB_LOAD_NAME = "checkpoint"
 CHECKPOINT_NAME = "lfads_vae"
-DEVICE = "gpu:0" # "cpu:0", or other gpus, e.g. "gpu:1"
+DEVICE = "tpu" # if "tpu" is uses TPU otherwise it runs on CPU or GPU
 PS_NEXAMPLES_TO_PROCESS = int(1e8) # if larger than number of examples, process all
 
 # L2 weights
@@ -30,12 +32,14 @@ L2_CI_ENC_SCALE = 0.0
 L2_GEN_2_FACTORS_SCALE = 0.0
 L2_CI_ENC_2_CO_IN = 0.0
 
+
 IC_DIM = 64
 FACTORS_DIM = 50
 IC_ENC_DIM = 128
 GEN_DIM = 200
 TRAIN_BATCH_SIZE = 800
 EVAL_BATCH_SIZE = 800
+PS_REPETITIONS = 100
 LEARNING_RATE_INIT = 0.01
 LEARNING_RATE_DECAY_FACTOR = 0.95
 LEARNING_RATE_STOP = 0.00001
@@ -98,6 +102,10 @@ DO_TRAIN_PRIOR_AR_ATAU = True
 DO_TRAIN_PRIOR_AR_NVAR = True
 
 flags = tf.app.flags
+flags.DEFINE_integer("max_steps", MAX_STEPS,
+                 "Max number of training steps.")
+
+
 flags.DEFINE_string("kind", "train",
                     "Type of model to build {train, \
                     posterior_sample_and_average, posterior_mean, \
@@ -279,6 +287,8 @@ flags.DEFINE_integer("train_batch_size", TRAIN_BATCH_SIZE,
                      "Batch size to use during training.")
 flags.DEFINE_integer("eval_batch_size", EVAL_BATCH_SIZE,
                      "Batch size to use during training.")
+flags.DEFINE_integer("ps_repetitions", PS_REPETITIONS,
+                     "Number of sampling for posterior sample and average.")
 
 flags.DEFINE_float("learning_rate_init", LEARNING_RATE_INIT,
                    "Learning rate initial value")
@@ -478,6 +488,7 @@ def build_hyperparameter_dict(flags):
   # Data
 # CP - in this model we use enumerations for the 'kind'
   #  d['kind'] = flags.kind
+  d['max_steps'] = flags.max_steps
   d['kind'] = kind_dict(flags.kind)
   d['output_dist'] = flags.output_dist
   d['data_dir'] = flags.data_dir
@@ -523,6 +534,7 @@ def build_hyperparameter_dict(flags):
   # Optimization
   d['train_batch_size'] = flags.train_batch_size
   d['eval_batch_size'] = flags.eval_batch_size
+  d['ps_repetitions'] = flags.ps_repetitions
   d['learning_rate_init'] = flags.learning_rate_init
   d['learning_rate_decay_factor'] = flags.learning_rate_decay_factor
   d['learning_rate_stop'] = flags.learning_rate_stop
@@ -587,7 +599,7 @@ def train(hps, datasets):
   #  sess.run(model.learning_rate.initializer)
 
   # temporary for testing:
-  model.train_model(hps, run_mode='pbt', num_steps=200)
+  model.train_model(hps, run_mode='standard', num_steps=hps['max_steps'])
 
 
 def write_model_runs(hps, datasets, output_fname=None):
@@ -610,7 +622,8 @@ def write_model_runs(hps, datasets, output_fname=None):
     output_fname (optional): output filename stem to write the model runs.
   """
   model = build_model(hps, datasets=datasets)
-  model.write_model_runs(datasets, output_fname)
+  #model.predict_model(hps)
+  model.write_model_runs(hps, datasets, output_fname)
 
 
 def write_model_samples(hps, datasets, dataset_name=None, output_fname=None):
@@ -741,21 +754,18 @@ def main(_):
   if FLAGS.allow_gpu_growth:
     config.gpu_options.allow_growth = True
   #sess = tf.Session(config=config)
-  train(hps, datasets)
-  """
-  with sess.as_default():
-    with tf.device(hps.device):
-      if hps.kind == kind_dict("train"):
-        train(hps, datasets)
-      elif hps.kind == kind_dict("posterior_sample_and_average"):
-        write_model_runs(hps, datasets, hps.output_filename_stem)
-      elif hps.kind == kind_dict("prior_sample"):
-        write_model_samples(hps, datasets, hps.output_filename_stem)
-      elif hps.kind == kind_dict("write_model_params"):
-        write_model_parameters(hps, hps.output_filename_stem, datasets)
-      else:
-        assert False, ("Kind %s is not implemented. " % kind)
-  """
+
+  if hps.kind == kind_dict("train"):
+    train(hps, datasets)
+  elif hps.kind == kind_dict("posterior_sample_and_average"):
+    write_model_runs(hps, datasets, hps.output_filename_stem)
+  elif hps.kind == kind_dict("prior_sample"):
+    write_model_samples(hps, datasets, hps.output_filename_stem)
+  elif hps.kind == kind_dict("write_model_params"):
+    write_model_parameters(hps, hps.output_filename_stem, datasets)
+  else:
+    assert False, ("Kind %s is not implemented. " % kind)
+
 
 if __name__ == "__main__":
     tf.app.run()
