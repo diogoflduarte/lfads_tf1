@@ -1,10 +1,17 @@
 from __future__ import print_function
 import tensorflow as tf
 import numpy as np
+import sys
+import time
 import os
 import re
 import logging
+import json
+import shlex
+#import random
+#import matplotlib.pyplot as plt
 import subprocess
+
 from helper_funcs import linear, makeInitialState
 from helper_funcs import kind_dict, kind_dict_key
 from helper_funcs import DiagonalGaussianFromInput, DiagonalGaussian
@@ -13,10 +20,13 @@ from helper_funcs import LinearTimeVarying
 from helper_funcs import KLCost_GaussianGaussian
 from data_funcs import write_data
 from helper_funcs import printer, mkdir_p
+#from plot_funcs import plot_data, close_all_plots
+#from data_funcs import read_datasets
 from customcells import ComplexCell
 from rnn_helper_funcs import BidirectionalDynamicRNN, DynamicRNN
 from helper_funcs import dropout
 # TPU related imports
+#from tensorflow.contrib import tpu
 from tensorflow.contrib.tpu.python.tpu import tpu_estimator
 
 
@@ -111,6 +121,7 @@ class LFADS(object):
     def __init__(self, hps, datasets):
         # store the hps
         print(hps)
+        hps['n_epochs_eval'] = 1
         self.datasets = datasets
         print(hps.lfads_save_dir)
         self.printlog = print
@@ -149,6 +160,7 @@ class LFADS(object):
                     data_mode = np.ones([data_dict['train_data'].shape[0],1], dtype=np.float32)
                     print(name)
                     name = np.repeat(np.array(name, dtype=np.str), data_dict['train_data'].shape[0])
+                    print(name.shape)
                     in_data = {'data':data_dict['train_data'].astype(np.float32),
                                'data_name':name,
                                'data_mode':data_mode}
@@ -204,6 +216,7 @@ class LFADS(object):
         # constructing Datasets using tf.data
         batch_size = params['batch_size']
         # datasets are already loaded at init
+        datasets = self.datasets
 
         #data_mode = np.ones([data.shape[0],1], dtype=np.float32)
         #data_d['data_mode']:data_mode
@@ -242,6 +255,7 @@ class LFADS(object):
       return input_fn, num_trials
 
     def lfads_model_fn(self, features, mode, params):
+        
         # to stop certain gradients paths through the graph in backprop
         def entry_stop_gradients(target, mask):
             mask_h = tf.abs(1. - mask)
@@ -495,6 +509,7 @@ class LFADS(object):
         ### CONTROLLER construction
         # this should only be done if a controller is requested
         # if not, skip all these graph elements like so:
+        print('TEST1', input_to_encoders.get_shape())
         if hps['co_dim'] == 0:
             with tf.variable_scope('generator'):
                 # setup generator
@@ -754,6 +769,7 @@ class LFADS(object):
         else:
             grad_binary_mask = cv_binary_mask
 
+        print('Test2', logrates.get_shape())
         # block gradients for coordinated dropout and cross-validation
         if hps['output_dist'].lower() == 'poisson':
             masked_logrates = entry_stop_gradients(logrates, grad_binary_mask)
@@ -765,6 +781,7 @@ class LFADS(object):
             loglikelihood_b_t = diag_gaussian_log_likelihood(dataset_ph,
                                                                   masked_output_mean, masked_output_logvar)
 
+        print('Test3', loglikelihood_b_t.get_shape())
         # cost for each trial
 
         # log_p_b_train =  (1. / cv_keep_ratio)**2 * tf.reduce_mean(
@@ -869,6 +886,7 @@ class LFADS(object):
         #    'eval_recon_heldout_samps': tf.metrics.mean(rec_cost_heldout_samps),
         #    'eval_total': tf.metrics.mean(total_cost),
         #}
+        print(loglikelihood_b_t.get_shape())        
         metric_rec_cost_heldin_samps = - (1. / cv_keep_ratio) * \
                                        tf.reduce_sum(tf.reduce_sum(loglikelihood_b_t * cv_binary_mask, axis=1),axis=1)
 
@@ -949,6 +967,8 @@ class LFADS(object):
         run_config = tf.contrib.tpu.RunConfig(
             save_checkpoints_steps=100,
             cluster=self.tpu_cluster_resolver,
+            #master=self.master,
+            #evaluation_master=self.master,
             keep_checkpoint_max=hps['max_ckpt_to_keep'],
             model_dir=hps['lfads_save_dir'],
             session_config=config,
@@ -1109,6 +1129,7 @@ class LFADS(object):
           datasets: a dictionary of named data_dictionaries, see top of lfads.py
           output_fname: a file name stem for the output files.
         """
+        hps = self.hps
         kind = kind_dict_key(hps.kind)
         all_model_runs = []
 
