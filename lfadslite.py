@@ -982,8 +982,8 @@ class LFADS(object):
 
         # Steps required for evaluation on the whole data
         eval_batch_size = params['eval_batch_size']
-        eval_steps_train = -(-num_trials_train // eval_batch_size)  # divide with ceil
-        eval_steps_valid = -(-num_trials_valid // eval_batch_size)
+        eval_steps_train = 1 #-(-num_trials_train // eval_batch_size)  # divide with ceil
+        eval_steps_valid = 1 #-(-num_trials_valid // eval_batch_size)
 
         # create the TPU estimator
         lfads = tf.contrib.tpu.TPUEstimator(model_fn=self.lfads_model_fn, params=params, config=run_config,
