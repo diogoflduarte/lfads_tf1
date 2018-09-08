@@ -599,7 +599,7 @@ def train(hps, datasets):
   #  sess.run(model.learning_rate.initializer)
 
   # temporary for testing:
-  model.train_model(hps, run_mode='standard', num_steps=hps['max_steps'])
+  model.train_model(hps, run_mode='pbt', num_steps=hps['max_steps'])
 
 
 def write_model_runs(hps, datasets, output_fname=None):
@@ -764,7 +764,7 @@ def main(_):
   elif hps.kind == kind_dict("write_model_params"):
     write_model_parameters(hps, hps.output_filename_stem, datasets)
   else:
-    assert False, ("Kind %s is not implemented. " % kind)
+    assert False, ("Kind %s is not implemented. " % hps.kind)
 
 
 if __name__ == "__main__":

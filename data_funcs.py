@@ -4,7 +4,7 @@ import json
 import numpy as np
 import warnings
 #import tensorflow as tf
-#from tensorflow.python.lib.io import file_io
+from tensorflow.python.lib.io import file_io
 #import __builtin__
 
 
@@ -121,8 +121,6 @@ def read_datasets(data_path, data_fname_stem):
   return dataset_dict
 
 
-
-
 def write_data(data_fname, data_dict, use_json=False, compression=None):
   """Write data in HDF5 format.
 
@@ -134,19 +132,19 @@ def write_data(data_fname, data_dict, use_json=False, compression=None):
     compression (optional): The compression to use for h5py (disabled by
       default because the library borks on scalars, otherwise try 'gzip').
   """
+  _data_fname = data_fname
   if 'gs://' in data_fname:
     # using google cloud bucket
     fparts = os.path.normpath(data_fname).split(os.sep)
     bucket_name = fparts[1]
     _data_fname = os.path.join('/tmp', fparts[-1])
-  else:
-    _data_fname = data_fname
-    dir_name = os.path.dirname(data_fname)
-    if not os.path.exists(dir_name):
-      os.makedirs(dir_name)
+
+  dir_name = os.path.dirname(data_fname)
+  if not file_io.file_exists(dir_name):
+    file_io.create_dir(dir_name)
 
   if use_json:
-    the_file = open(_data_fname,'w')
+    the_file = file_io.FileIO(data_fname,'w')
     json.dump(data_dict, the_file)
     the_file.close()
   else:
@@ -159,14 +157,15 @@ def write_data(data_fname, data_dict, use_json=False, compression=None):
           else:
             print('Saving variable with name: ', clean_k)
           hf.create_dataset(clean_k, data=v, compression=compression)
+      if 'gs://' in data_fname:
+        # using google cloud bucket
+        upload_blob(bucket_name, _data_fname, os.path.join(*fparts[2:]))
+        os.remove(_data_fname)
     except IOError:
       print("Cannot open %s for writing.", _data_fname)
       raise
 
-  if 'gs://' in data_fname:
-    # using google cloud bucket
-    upload_blob(bucket_name, _data_fname, os.path.join(*fparts[2:]))
-    os.remove(_data_fname)
+
 
 
 

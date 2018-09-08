@@ -11,6 +11,7 @@ import shlex
 #import random
 #import matplotlib.pyplot as plt
 import subprocess
+import warnings
 
 from helper_funcs import linear, makeInitialState
 from helper_funcs import kind_dict, kind_dict_key
@@ -132,22 +133,27 @@ class LFADS(object):
             hps['use_tpu'] = False
 
         self.use_tpu = hps['use_tpu']
-
-        if self.use_tpu:
-            my_project = subprocess.check_output([
-                'gcloud','config','get-value','project'])
-            my_zone = subprocess.check_output([
-                'gcloud','config','get-value','compute/zone'])
-            print(my_project, my_zone)
-            tpu_cluster_resolver = tf.contrib.cluster_resolver.TPUClusterResolver(
-                    tpu=[os.environ['TPU_NAME']],
-                    #zone=my_zone,
-                    #project=my_project
-                    )
-            self.tpu_cluster_resolver = tpu_cluster_resolver
-            #self.master = tpu_cluster_resolver.get_master()
-        else:
-            self.tpu_cluster_resolver = None
+        try:
+            if self.use_tpu:
+                my_project = subprocess.check_output([
+                    'gcloud','config','get-value','project'])
+                my_zone = subprocess.check_output([
+                    'gcloud','config','get-value','compute/zone'])
+                tpu_name = os.environ['TPU_NAME']
+                # todo, do check with gcloud
+                assert len(tpu_name) > 2, 'invalid TPU_NAME value'
+                tpu_cluster_resolver = tf.contrib.cluster_resolver.TPUClusterResolver(
+                        tpu=[tpu_name],
+                        #zone=my_zone,
+                        #project=my_project
+                        )
+                self.tpu_cluster_resolver = tpu_cluster_resolver
+                #self.master = tpu_cluster_resolver.get_master()
+            else:
+                self.tpu_cluster_resolver = None
+        except:
+            warnings.warn('Error during TPU cluster resolver when use_tpu=True. Setting use_tpu to False.')
+            self.use_tpu = False
 
     def _data_fn(self, mode, num_epochs=None):
         def input_fn(params):
@@ -184,9 +190,7 @@ class LFADS(object):
         return input_fn
 
     def data_fn(self, mode, data_type, n_repeats=1):
-
       datasets = self.datasets
-
       dataset = {}
       for name, data_dict in datasets.items():
         # reading the data from numpy array and preparing tf.Dataset
@@ -203,20 +207,18 @@ class LFADS(object):
 
         # preparing the dict to pass to tf.Dataset
         data_d = {'data': data.astype(np.float32)}
-        if data_cv_mask is not None:
-            data_d['data_cv_mask'] = data_cv_mask.astype(np.float32)
+        #if data_cv_mask is not None:
+        #    data_d['data_cv_mask'] = data_cv_mask.astype(np.float32)
         if data_ext_input is not None:
             data_d['data_ext_input'] = data_ext_input.astype(np.float32)
         if data_truth is not None:
             data_d['data_truth'] = data_truth.astype(np.float32)
-
 
       def input_fn(params):
         # TODO: adapt this for multiple sessions
         # constructing Datasets using tf.data
         batch_size = params['batch_size']
         # datasets are already loaded at init
-        datasets = self.datasets
 
         #data_mode = np.ones([data.shape[0],1], dtype=np.float32)
         #data_d['data_mode']:data_mode
@@ -243,6 +245,7 @@ class LFADS(object):
         #    bs[k] = [[ceil_datasize] ] + [[None]]*len(data_d[k].shape[1:])
 
         dataset.prefetch(batch_size)
+        #dataset = dataset.apply(tf.contrib.data.batch_and_drop_remainder(batch_size))
         dataset = dataset.batch(batch_size, drop_remainder=True)
         #dataset[name] = dataset[name].padded_batch(batch_size, bs )
         dataset = dataset.cache()
@@ -287,10 +290,10 @@ class LFADS(object):
         # only when training do
         if mode == tf.estimator.ModeKeys.TRAIN:
             keep_prob = tf.convert_to_tensor(hps['keep_prob'])
-            keep_ratio = tf.convert_to_tensor(hps['keep_ratio'])
+            keep_ratio = hps['keep_ratio']
         else:
             keep_prob = tf.convert_to_tensor(1.0)
-            keep_ratio = tf.convert_to_tensor(1.0)
+            keep_ratio = 1.0
 
         kl_ic_weight = tf.convert_to_tensor(hps['kl_ic_weight'])
         kl_co_weight = tf.convert_to_tensor(hps['kl_co_weight'])
@@ -435,7 +438,7 @@ class LFADS(object):
         seq_len = hps['num_steps'] * np.ones([batch_size], dtype=np.int32)
 
         # coordinated dropout
-        if hps['keep_ratio'] < 1:
+        if keep_ratio < 1:
             # coordinated dropout enabled on inputs
             masked_dataset_ph, coor_drop_binary_mask = dropout(dataset_ph, keep_ratio)
         else:
@@ -757,7 +760,7 @@ class LFADS(object):
 
         ## calculate reconstruction cost
         # get final mask for gradient blocking
-        if hps['keep_ratio'] < 1:
+        if keep_ratio < 1:
             # let the gradients pass through on blocked nodes with some probability
             random_tensor = tf.convert_to_tensor(1. - cd_grad_passthru_prob)
             random_tensor += tf.random_uniform(tf.shape(coor_drop_binary_mask),
@@ -982,8 +985,8 @@ class LFADS(object):
 
         # Steps required for evaluation on the whole data
         eval_batch_size = params['eval_batch_size']
-        eval_steps_train = -(-num_trials_train // eval_batch_size)  # divide with ceil
-        eval_steps_valid = -(-num_trials_valid // eval_batch_size)
+        eval_steps_train = 1 #-(-num_trials_train // eval_batch_size)  # divide with ceil
+        eval_steps_valid = 1 #-(-num_trials_valid // eval_batch_size)
 
         # create the TPU estimator
         lfads = tf.contrib.tpu.TPUEstimator(model_fn=self.lfads_model_fn, params=params, config=run_config,
@@ -1129,8 +1132,7 @@ class LFADS(object):
           datasets: a dictionary of named data_dictionaries, see top of lfads.py
           output_fname: a file name stem for the output files.
         """
-        hps = self.hps
-        kind = kind_dict_key(hps.kind)
+        kind = kind_dict_key(hps['kind'])
         all_model_runs = []
 
         for data_name, data_dict in datasets.items():
@@ -1145,7 +1147,7 @@ class LFADS(object):
             self.printlog("Writing data for %s data and kind %s to file %s." % (data_name, data_kind, fname))
             model_runs = self.predict_model(data_name, data_kind, hps)
             all_model_runs.append(model_runs)
-            full_fname = os.path.join(hps.lfads_save_dir, fname)
+            full_fname = os.path.join(hps['lfads_save_dir'], fname)
             write_data(full_fname, model_runs, compression='gzip')
             self.printlog("Done.")
 
