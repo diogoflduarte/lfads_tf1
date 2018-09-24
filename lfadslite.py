@@ -989,18 +989,23 @@ class LFADS(object):
         eval_steps_valid = 1 #-(-num_trials_valid // eval_batch_size)
 
         # create the TPU estimator
+        tt = time.time()
         lfads = tf.contrib.tpu.TPUEstimator(model_fn=self.lfads_model_fn, params=params, config=run_config,
                                             use_tpu=self.use_tpu, train_batch_size=params['train_batch_size'],
                                             eval_batch_size=eval_batch_size)
+        print("Time taken for TPUEstimator {0:0.0f}".format(time.time()-tt))
 
         if run_mode.lower() == 'pbt':
             assert num_steps, 'You must specify max_epochs when run_mode is PBT!'
             # Train the model
+            tt = time.time()
             lfads.train(train_input, steps=num_steps)
+            print("Time taken for Training {0:0.0f}".format(time.time() - tt))
             # Evaluate
+            tt = time.time()
             train_costs = lfads.evaluate(eval_input_train, name='train_data', steps=eval_steps_train)
             valid_costs = lfads.evaluate(eval_input_valid, name='valid_data', steps=eval_steps_valid)
-
+            print("Time taken for Evaluation {0:0.0f}".format(time.time() - tt))
             # Making parameters available for lfads_wrappper
             if hps['checkpoint_pb_load_name'] == 'checkpoint_lve':
                 # if we are returning lve costs
