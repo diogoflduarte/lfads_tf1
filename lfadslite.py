@@ -1,5 +1,7 @@
 from __future__ import print_function
 import tensorflow as tf
+#import tensorflow_probability as tfp
+#import tfp.distributions as tfd
 import numpy as np
 import sys
 import time
@@ -14,7 +16,7 @@ from helper_funcs import linear, init_linear_transform, makeInitialState
 from helper_funcs import ListOfRandomBatches, kind_dict, kind_dict_key
 from helper_funcs import DiagonalGaussianFromInput, DiagonalGaussian, LearnableAutoRegressive1Prior
 from helper_funcs import DiagonalGaussianFromExisting, LearnableDiagonalGaussian, diag_gaussian_log_likelihood
-from helper_funcs import LinearTimeVarying
+from helper_funcs import LinearTimeVarying, InverseGamma
 from helper_funcs import KLCost_GaussianGaussian, KLCost_GaussianGaussianProcessSampled
 from data_funcs import write_data
 from helper_funcs import printer, mkdir_p
@@ -229,6 +231,13 @@ class LFADS(object):
                     out_mat_fxc = tf.concat( [ out_mat_fxc, out_mat_fxc ], 0 )
                 if out_bias_1xc is not None:
                     out_bias_1xc = tf.concat( [ out_bias_1xc, out_bias_1xc ], 0 )
+            elif hps.output_dist.lower() == 'inverse-gamma':
+                output_size = data_dim * 2
+                if out_mat_fxc is not None:
+                    out_mat_fxc = tf.concat( [ out_mat_fxc, out_mat_fxc ], 0 )
+                if out_bias_1xc is not None:
+                    out_bias_1xc = tf.concat( [ out_bias_1xc, out_bias_1xc ], 0 )
+                    
             out_fac_linear = init_linear_transform( hps.factors_dim, output_size, mat_init_value=out_mat_fxc,
                                                    bias_init_value=out_bias_1xc,
                                                    name= name+'_out_fac_linear' )
@@ -516,6 +525,8 @@ class LFADS(object):
                 nonlin = 'exp'
             elif hps.output_dist.lower() == 'gaussian':
                 nonlin = None
+            elif hps.output_dist.lower() == 'inverse-gamma':
+                nonlin = None
             else:
                 raise NameError("Unknown output distribution: " + hps.output_dist)
                 
@@ -537,6 +548,11 @@ class LFADS(object):
                 # get linear outputs, split into mean and variance
                 self.output_mean, self.output_logvar = tf.split(rates_object.output,
                                                                 2, axis=2)
+                self.output_dist_params=rates_object.output
+            elif hps.output_dist.lower() == 'inverse-gamma':
+                self.alpha, self.beta = tf.split( rates_object.output, 2, axis=2 )
+                self.alpha = tf.round( tf.nn.relu( self.alpha ) + 1 )
+                self.beta = tf.nn.relu( self.beta ) + 1 
                 self.output_dist_params=rates_object.output
 
 
@@ -618,6 +634,13 @@ class LFADS(object):
             masked_output_logvar = entry_stop_gradients(self.output_logvar, grad_binary_mask)
             self.loglikelihood_b_t = diag_gaussian_log_likelihood(self.dataset_ph,
                                                                   masked_output_mean, masked_output_logvar)
+        elif hps.output_dist.lower() == 'inverse-gamma':
+            #masked_output_alpha = entry_stop_gradients(self.alpha, grad_binary_mask)
+            masked_output_alpha = self.alpha;
+            masked_output_beta = self.beta;
+            #masked_output_beta = entry_stop_gradients(self.beta, grad_binary_mask)
+            self.loglikelihood_b_t = tf.contrib.distributions.InverseGamma( masked_output_alpha, masked_output_beta ).log_prob( self.dataset_ph )
+            #self.loglikelihood_b_t = InverseGamma( masked_output_alpha, masked_output;
             
         # cost for each trial
 
@@ -1128,6 +1151,8 @@ class LFADS(object):
                         lfads_output = lfads_output
                     elif hps.output_dist.lower() == 'gaussian':
                         raise NameError("Not implemented!")
+                    elif hps.output_dist.lower() == 'inverse-gamma':
+                        raise NameError("Not implemented!")
                     # Get R^2
                     data_true = data_dict['valid_truth']
                     data_cvmask = data_dict['valid_data_cvmask']
@@ -1144,6 +1169,8 @@ class LFADS(object):
                     if hps.output_dist.lower() == 'poisson':
                         lfads_output = lfads_output
                     elif hps.output_dist.lower() == 'gaussian':
+                        raise NameError("Not implemented!")
+                    elif hps.output_dist.lower() == 'inverse-gamma':
                         raise NameError("Not implemented!")
                     # Get R^2
                     data_true = data_dict['train_truth']
