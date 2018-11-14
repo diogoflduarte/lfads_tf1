@@ -16,7 +16,7 @@ from helper_funcs import linear, init_linear_transform, makeInitialState
 from helper_funcs import ListOfRandomBatches, kind_dict, kind_dict_key
 from helper_funcs import DiagonalGaussianFromInput, DiagonalGaussian, LearnableAutoRegressive1Prior
 from helper_funcs import DiagonalGaussianFromExisting, LearnableDiagonalGaussian, diag_gaussian_log_likelihood
-from helper_funcs import LinearTimeVarying, InverseGamma
+from helper_funcs import LinearTimeVarying
 from helper_funcs import KLCost_GaussianGaussian, KLCost_GaussianGaussianProcessSampled
 from data_funcs import write_data
 from helper_funcs import printer, mkdir_p
