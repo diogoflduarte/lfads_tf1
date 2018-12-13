@@ -1,5 +1,7 @@
 from __future__ import print_function
 import tensorflow as tf
+#import tensorflow_probability as tfp
+#import tfp.distributions as tfd
 import numpy as np
 import sys
 import time
@@ -229,6 +231,13 @@ class LFADS(object):
                     out_mat_fxc = tf.concat( [ out_mat_fxc, out_mat_fxc ], 0 )
                 if out_bias_1xc is not None:
                     out_bias_1xc = tf.concat( [ out_bias_1xc, out_bias_1xc ], 0 )
+            elif hps.output_dist.lower() == 'inverse-gamma':
+                output_size = data_dim * 2
+                if out_mat_fxc is not None:
+                    out_mat_fxc = tf.concat( [ out_mat_fxc, out_mat_fxc ], 0 )
+                if out_bias_1xc is not None:
+                    out_bias_1xc = tf.concat( [ out_bias_1xc, out_bias_1xc ], 0 )
+                    
             out_fac_linear = init_linear_transform( hps.factors_dim, output_size, mat_init_value=out_mat_fxc,
                                                    bias_init_value=out_bias_1xc,
                                                    name= name+'_out_fac_linear' )
@@ -516,6 +525,8 @@ class LFADS(object):
                 nonlin = 'exp'
             elif hps.output_dist.lower() == 'gaussian':
                 nonlin = None
+            elif hps.output_dist.lower() == 'inverse-gamma':
+                nonlin = None
             else:
                 raise NameError("Unknown output distribution: " + hps.output_dist)
                 
@@ -537,6 +548,11 @@ class LFADS(object):
                 # get linear outputs, split into mean and variance
                 self.output_mean, self.output_logvar = tf.split(rates_object.output,
                                                                 2, axis=2)
+                self.output_dist_params=rates_object.output
+            elif hps.output_dist.lower() == 'inverse-gamma':
+                self.alpha, self.beta = tf.split( rates_object.output, 2, axis=2 )
+                self.alpha = tf.round( tf.nn.relu( self.alpha ) + 1 )
+                self.beta = tf.nn.relu( self.beta ) + 1 
                 self.output_dist_params=rates_object.output
 
 
@@ -618,6 +634,13 @@ class LFADS(object):
             masked_output_logvar = entry_stop_gradients(self.output_logvar, grad_binary_mask)
             self.loglikelihood_b_t = diag_gaussian_log_likelihood(self.dataset_ph,
                                                                   masked_output_mean, masked_output_logvar)
+        elif hps.output_dist.lower() == 'inverse-gamma':
+            #masked_output_alpha = entry_stop_gradients(self.alpha, grad_binary_mask)
+            masked_output_alpha = self.alpha;
+            masked_output_beta = self.beta;
+            #masked_output_beta = entry_stop_gradients(self.beta, grad_binary_mask)
+            self.loglikelihood_b_t = tf.contrib.distributions.InverseGamma( masked_output_alpha, masked_output_beta ).log_prob( self.dataset_ph )
+            #self.loglikelihood_b_t = InverseGamma( masked_output_alpha, masked_output;
             
         # cost for each trial
 
@@ -628,21 +651,24 @@ class LFADS(object):
         #self.rec_cost_train = -self.log_p_train
         #ones_ratio = tf.reduce_mean(self.cv_binary_mask_batch)
 
-        self.rec_cost_train = - (1. / self.cv_keep_ratio) * \
-                              tf.reduce_sum(self.loglikelihood_b_t * self.cv_binary_mask_batch) / tf.cast(graph_batch_size, tf.float32)
+        #self.rec_cost_train = - (1. / self.cv_keep_ratio) * \
+        #                      tf.reduce_sum(self.loglikelihood_b_t * self.cv_binary_mask_batch) / tf.cast(graph_batch_size, tf.float32)
+        self.rec_cost_train = -(1. / self.cv_keep_ratio) * tf.reduce_mean(self.loglikelihood_b_t * self.cv_binary_mask_batch)
+
         #self.rec_cost_train = - tf.reduce_sum(self.loglikelihood_b_t * self.cv_binary_mask_batch) / graph_batch_size
         #self.rec_cost_train /= ones_ratio
 
 
         # Valid cost for each trial
-        #self.log_p_b_valid = (1. / (1. - self.cv_keep_ratio))**2 * tf.reduce_mean(
+        #self.log_p_b_valid = (1. / (1. - self.ckcv_keep_ratio))**2 * tf.reduce_mean(
         #    tf.reduce_mean(self.loglikelihood_b_t * (1. - self.cv_binary_mask_batch), [2] ), [1] )
         # total rec cost (avg over all trials in batch)
         #self.log_p_valid = tf.reduce_mean( self.log_p_b_valid, [0])
         #self.rec_cost_valid = -self.log_p_valid
         if self.cv_keep_ratio != 1.0:
-            self.rec_cost_valid = - (1. / (1. - self.cv_keep_ratio)) * \
-                                  tf.reduce_sum(self.loglikelihood_b_t * (1. - self.cv_binary_mask_batch)) / tf.cast(graph_batch_size, tf.float32)
+            #self.rec_cost_valid = - (1. / (1. - self.cv_keep_ratio)) * \
+            #                      tf.reduce_sum(self.loglikelihood_b_t * (1. - self.cv_binary_mask_batch)) / tf.cast(graph_batch_size, tf.float32)
+            self.rec_cost_valid = -(1. / (1. - self.cv_keep_ratio)) * tf.reduce_mean(self.loglikelihood_b_t * (1. - self.cv_binary_mask_batch))
         else:
             self.rec_cost_valid = tf.constant(np.nan)
         #self.rec_cost_valid = - tf.reduce_sum(self.loglikelihood_b_t * (1. - self.cv_binary_mask_batch)) / graph_batch_size
@@ -683,7 +709,8 @@ class LFADS(object):
             self.l2_cost = tf.add_n(l2_costs) / tf.add_n(l2_numels)
 
         ## calculate total training cost
-        self.total_cost = self.l2_weight * self.l2_cost + self.kl_weight * self.kl_cost + self.rec_cost_train
+        self.total_cost = hps['loss_scale']*( self.l2_weight * self.l2_cost + self.kl_weight * self.kl_cost) + \
+         hps['loss_scale']*self.rec_cost_train
         
 
         if hps.do_train_encoder_only:
@@ -706,8 +733,9 @@ class LFADS(object):
                                                     self.gradients, \
                                                     hps['max_grad_norm'])
         # this is the optimizer
-        self.opt = tf.train.AdamOptimizer(self.learning_rate, beta1=0.9, beta2=0.999,
-                                     epsilon=1e-01)
+        #self.opt = tf.train.AdamOptimizer(self.learning_rate)
+        self.opt = tf.train.AdamOptimizer(self.learning_rate, beta1=hps['beta1'], beta2=hps['beta2'], epsilon=hps['adam_epsilon'])
+        #, beta1=0.9, beta2=0.999, epsilon=1e-01)
 
         # global that holds current step number
         self.train_step = tf.get_variable("global_step", [], tf.int64,
@@ -1128,6 +1156,8 @@ class LFADS(object):
                         lfads_output = lfads_output
                     elif hps.output_dist.lower() == 'gaussian':
                         raise NameError("Not implemented!")
+                    elif hps.output_dist.lower() == 'inverse-gamma':
+                        raise NameError("Not implemented!")
                     # Get R^2
                     data_true = data_dict['valid_truth']
                     data_cvmask = data_dict['valid_data_cvmask']
@@ -1144,6 +1174,8 @@ class LFADS(object):
                     if hps.output_dist.lower() == 'poisson':
                         lfads_output = lfads_output
                     elif hps.output_dist.lower() == 'gaussian':
+                        raise NameError("Not implemented!")
+                    elif hps.output_dist.lower() == 'inverse-gamma':
                         raise NameError("Not implemented!")
                     # Get R^2
                     data_true = data_dict['train_truth']
@@ -1303,7 +1335,7 @@ class LFADS(object):
             run_type = kind_dict('posterior_sample_and_average')
 
         feed_dict = self.build_feed_dict(data_name, data_bxtxd, cv_rand_mask=np.ones_like(data_bxtxd),
-        	ext_input_bxtxi=ext_input_bxtxi, run_type=run_type,
+            ext_input_bxtxi=ext_input_bxtxi, run_type=run_type,
                                          keep_prob=1.0, keep_ratio=1.0)
         # Non-temporal signals will be batch x dim.
         # Temporal signals are list length T with elements batch x dim.
