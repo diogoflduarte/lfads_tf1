@@ -297,7 +297,7 @@ class ComplexCell(LayerRNNCell):
     con_s_new = self.gru_block(con_inputs, con_s, cell_name='con_gru')
 
     # calculate the inputs to the generator
-    with tf.variable_scope("con_2_gen"):
+    with tf.name_scope("con_2_gen"):
         # transformation to mean and logvar of the posterior
         co_mean = linear(con_s_new, self._co_dim,
                                name="con_2_gen_transform_mean")

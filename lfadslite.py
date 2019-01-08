@@ -1299,6 +1299,8 @@ class LFADS(object):
                 #train_costs.append(tr_total_cost)
             nepoch += 1
 
+            
+
 
     def eval_model_runs_batch(self, data_name, data_bxtxd, ext_input_bxtxi,
                               do_eval_cost=False, do_average_batch=False):
@@ -1329,6 +1331,9 @@ class LFADS(object):
         else:
             run_type = kind_dict('posterior_sample_and_average')
 
+        feed_dict = self.build_feed_dict(data_name, data_bxtxd, cv_rand_mask=np.ones_like(data_bxtxd),
+        	ext_input_bxtxi=ext_input_bxtxi, run_type=run_type,
+                                         keep_prob=1.0, keep_ratio=1.0)
         # Non-temporal signals will be batch x dim.
         # Temporal signals are list length T with elements batch x dim.
         tf_vals = [self.gen_ics, self.gen_states, self.factors,
@@ -1355,7 +1360,7 @@ class LFADS(object):
         np_vals_flat = [np.concatenate([q[i] for q in np_vals_flat]) for i in xrange(len(np_vals_flat[0]))]
         return np_vals_flat
     #        tf_vals_flat, fidxs = flatten(tf_vals)
-
+            
     # this does the bulk of posterior sample & mean
     def eval_model_runs_avg_epoch(self, data_name, data_extxd, ext_input_bxtxi, pm_batch_size=None,
                                   do_average_batch=False):
@@ -1413,7 +1418,6 @@ class LFADS(object):
 
         # choose E_to_process trials from the data
         data_bxtxd = data_extxd[0:E_to_process]
-        #ext_input_bxtxi = ext_input_bxtxi[0:E_to_process]
         for rep in range(pm_batch_size):
             #printer("Running repetitions %d of %d." % (rep + 1, pm_batch_size))
             self.printlog("Running repetitions %d of %d." % (rep + 1, pm_batch_size))
@@ -1545,58 +1549,3 @@ class LFADS(object):
         return all_model_runs
 
             
-    def eval_model_parameters(self, use_nested=True, include_strs=None):
-        """Evaluate and return all of the TF variables in the model.
-
-        Args:
-        use_nested (optional): For returning values, use a nested dictoinary, based
-          on variable scoping, or return all variables in a flat dictionary.
-        include_strs (optional): A list of strings to use as a filter, to reduce the
-          number of variables returned.  A variable name must contain at least one
-          string in include_strs as a sub-string in order to be returned.
-
-        Returns:
-          The parameters of the model.  This can be in a flat
-          dictionary, or a nested dictionary, where the nesting is by variable
-          scope.
-        """
-        all_tf_vars = tf.global_variables()
-        session = tf.get_default_session()
-        all_tf_vars_eval = session.run(all_tf_vars)
-        vars_dict = {}
-        strs = ["LFADS"]
-        if include_strs:
-          strs += include_strs
-
-        for i, (var, var_eval) in enumerate(zip(all_tf_vars, all_tf_vars_eval)):
-          if any(s in include_strs for s in var.name):
-            if not isinstance(var_eval, np.ndarray): # for H5PY
-              print(var.name, """ is not numpy array, saving as numpy array
-                    with value: """, var_eval, type(var_eval))
-              e = np.array(var_eval)
-              print(e, type(e))
-            else:
-              e = var_eval
-            vars_dict[var.name] = e
-
-        if not use_nested:
-          return vars_dict
-
-        var_names = vars_dict.keys()
-        nested_vars_dict = {}
-        current_dict = nested_vars_dict
-        for v, var_name in enumerate(var_names):
-          var_split_name_list = var_name.split('/')
-          split_name_list_len = len(var_split_name_list)
-          current_dict = nested_vars_dict
-          for p, part in enumerate(var_split_name_list):
-            if p < split_name_list_len - 1:
-              if part in current_dict:
-                current_dict = current_dict[part]
-              else:
-                current_dict[part] = {}
-                current_dict = current_dict[part]
-            else:
-              current_dict[part] = vars_dict[var_name]
-
-        return nested_vars_dict

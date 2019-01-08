@@ -41,7 +41,7 @@ LEARNING_RATE_INIT = 0.01
 LEARNING_RATE_DECAY_FACTOR = 0.95
 LEARNING_RATE_STOP = 0.00001
 LEARNING_RATE_N_TO_COMPARE = 6
-N_EPOCHS_EARLY_STOP = 30
+N_EPOCHS_EARLY_STOP = 300000
 DO_RESET_LEARNING_RATE = False
 
 # flag to only allow training of the encoder (i.e., lock the generator, factors readout, rates readout, controller, etc weights)
@@ -98,6 +98,12 @@ PRIOR_AR_AUTOCORRELATION = 10.0
 PRIOR_AR_PROCESS_VAR = 0.1
 DO_TRAIN_PRIOR_AR_ATAU = True
 DO_TRAIN_PRIOR_AR_NVAR = True
+
+# params for loss scaling/ ADAM optimizer
+LOSS_SCALE = 1e4
+ADAM_EPSILON = 1e-8
+ADAM_BETA1 = 0.9
+ADAM_BETA2 = 0.999
 
 flags = tf.app.flags
 flags.DEFINE_string("kind", "train",
@@ -374,6 +380,17 @@ flags.DEFINE_float("kl_ic_weight", KL_IC_WEIGHT,
 flags.DEFINE_float("kl_co_weight", KL_CO_WEIGHT,
                    "Strength of KL weight on controller output KL penalty.")
 
+# LOSS SCALING/ADAM OPTIMIZER PRESETS
+flags.DEFINE_float("loss_scale", LOSS_SCALE,
+                   "Scaling of loss.")
+flags.DEFINE_float("adam_epsilon", ADAM_EPSILON,
+                   "Epsilon parameter of ADAM optimizer.")
+flags.DEFINE_float("adam_beta1", ADAM_BETA1,
+                   "Beta1 parameter of ADAM optimizer.")
+flags.DEFINE_float("adam_beta2", ADAM_BETA2,
+                   "Beta2 parameter of ADAM optimizer.")
+
+
 FLAGS = flags.FLAGS
 
 
@@ -562,6 +579,12 @@ def build_hyperparameter_dict(flags):
   d['l2_start_step'] = flags.l2_start_step
   d['l2_increase_steps'] = flags.l2_increase_steps
 
+  # Loss scaling/Adam Optimizer Presets
+  d['loss_scale'] = flags.loss_scale
+  d['adam_epsilon'] = flags.adam_epsilon
+  d['beta1'] = flags.adam_beta1
+  d['beta2'] = flags.adam_beta2
+  
   return d
 
 class hps_dict_to_obj(dict):
