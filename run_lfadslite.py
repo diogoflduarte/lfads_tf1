@@ -36,6 +36,7 @@ FACTORS_DIM = 50
 IC_ENC_DIM = 128
 GEN_DIM = 200
 BATCH_SIZE = 128
+VALID_BATCH_SIZE = 128
 LEARNING_RATE_INIT = 0.01
 LEARNING_RATE_DECAY_FACTOR = 0.95
 LEARNING_RATE_STOP = 0.00001
@@ -277,6 +278,8 @@ flags.DEFINE_integer("controller_input_lag", CONTROLLER_INPUT_LAG,
 
 # OPTIMIZATION
 flags.DEFINE_integer("batch_size", BATCH_SIZE,
+                     "Batch size to use during training.")
+flags.DEFINE_integer("valid_batch_size", VALID_BATCH_SIZE,
                      "Batch size to use during training.")
 flags.DEFINE_float("learning_rate_init", LEARNING_RATE_INIT,
                    "Learning rate initial value")
@@ -522,6 +525,7 @@ def build_hyperparameter_dict(flags):
   d['con_dim'] = flags.con_dim
   # Optimization
   d['batch_size'] = flags.batch_size
+  d['valid_batch_size'] = flags.valid_batch_size
   d['learning_rate_init'] = flags.learning_rate_init
   d['learning_rate_decay_factor'] = flags.learning_rate_decay_factor
   d['learning_rate_stop'] = flags.learning_rate_stop
