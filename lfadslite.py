@@ -660,7 +660,7 @@ class LFADS(object):
 
 
         # Valid cost for each trial
-        #self.log_p_b_valid = (1. / (1. - self.ckcv_keep_ratio))**2 * tf.reduce_mean(
+        #self.log_p_b_valid = (1. / (1. - self.cv_keep_ratio))**2 * tf.reduce_mean(
         #    tf.reduce_mean(self.loglikelihood_b_t * (1. - self.cv_binary_mask_batch), [2] ), [1] )
         # total rec cost (avg over all trials in batch)
         #self.log_p_valid = tf.reduce_mean( self.log_p_b_valid, [0])
@@ -865,7 +865,9 @@ class LFADS(object):
         epoch_idxs[name] = 0
         if kind == 'valid':
             # pass one large batch for validation set
-            random_example_idxs = [np.arange(nexamples)]
+            # random_example_idxs = [np.arange(nexamples)]
+            random_example_idxs = \
+                ListOfRandomBatches(nexamples, self.hps.valid_batch_size)
         else:
             random_example_idxs = \
                 ListOfRandomBatches(nexamples, batch_size)
@@ -1334,9 +1336,6 @@ class LFADS(object):
         else:
             run_type = kind_dict('posterior_sample_and_average')
 
-        feed_dict = self.build_feed_dict(data_name, data_bxtxd, cv_rand_mask=np.ones_like(data_bxtxd),
-            ext_input_bxtxi=ext_input_bxtxi, run_type=run_type,
-                                         keep_prob=1.0, keep_ratio=1.0)
         # Non-temporal signals will be batch x dim.
         # Temporal signals are list length T with elements batch x dim.
         tf_vals = [self.gen_ics, self.gen_states, self.factors,
@@ -1347,8 +1346,20 @@ class LFADS(object):
         if self.hps.co_dim > 0:
           tf_vals.append(self.controller_outputs)
 
-        # flatten for sending into session.run
-        np_vals_flat = session.run(tf_vals, feed_dict=feed_dict)
+        # MRK, run Posterior sampling on batches
+        l = list(range(data_bxtxd.shape[0]))
+        b = self.hps.valid_batch_size
+        batches = [l[i:i + b] for i in xrange(0, len(l), b)]
+        np_vals_flat = []
+        for idx in batches:
+            ext_inputs = ext_input_bxtxi[idx] if ext_input_bxtxi else None
+            feed_dict = self.build_feed_dict(data_name, data_bxtxd[idx], cv_rand_mask=np.ones_like(data_bxtxd[idx]),
+        	    ext_input_bxtxi=ext_inputs, run_type=run_type,
+                                         keep_prob=1.0, keep_ratio=1.0)
+            # flatten for sending into session.run
+            np_vals_flat.append(session.run(tf_vals, feed_dict=feed_dict))
+        # concatenate all the batches
+        np_vals_flat = [np.concatenate([q[i] for q in np_vals_flat]) for i in xrange(len(np_vals_flat[0]))]
         return np_vals_flat
     #        tf_vals_flat, fidxs = flatten(tf_vals)
             

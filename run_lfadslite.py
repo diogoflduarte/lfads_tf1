@@ -36,6 +36,7 @@ FACTORS_DIM = 50
 IC_ENC_DIM = 128
 GEN_DIM = 200
 BATCH_SIZE = 128
+VALID_BATCH_SIZE = 128
 LEARNING_RATE_INIT = 0.01
 LEARNING_RATE_DECAY_FACTOR = 0.95
 LEARNING_RATE_STOP = 0.00001
@@ -97,6 +98,12 @@ PRIOR_AR_AUTOCORRELATION = 10.0
 PRIOR_AR_PROCESS_VAR = 0.1
 DO_TRAIN_PRIOR_AR_ATAU = True
 DO_TRAIN_PRIOR_AR_NVAR = True
+
+# params for loss scaling/ ADAM optimizer
+LOSS_SCALE = 1e4
+ADAM_EPSILON = 1e-8
+ADAM_BETA1 = 0.9
+ADAM_BETA2 = 0.999
 
 flags = tf.app.flags
 flags.DEFINE_string("kind", "train",
@@ -278,6 +285,8 @@ flags.DEFINE_integer("controller_input_lag", CONTROLLER_INPUT_LAG,
 # OPTIMIZATION
 flags.DEFINE_integer("batch_size", BATCH_SIZE,
                      "Batch size to use during training.")
+flags.DEFINE_integer("valid_batch_size", VALID_BATCH_SIZE,
+                     "Batch size to use during training.")
 flags.DEFINE_float("learning_rate_init", LEARNING_RATE_INIT,
                    "Learning rate initial value")
 flags.DEFINE_float("learning_rate_decay_factor", LEARNING_RATE_DECAY_FACTOR,
@@ -370,6 +379,17 @@ flags.DEFINE_float("kl_ic_weight", KL_IC_WEIGHT,
                    "Strength of KL weight on initial conditions KL penatly.")
 flags.DEFINE_float("kl_co_weight", KL_CO_WEIGHT,
                    "Strength of KL weight on controller output KL penalty.")
+
+# LOSS SCALING/ADAM OPTIMIZER PRESETS
+flags.DEFINE_float("loss_scale", LOSS_SCALE,
+                   "Scaling of loss.")
+flags.DEFINE_float("adam_epsilon", ADAM_EPSILON,
+                   "Epsilon parameter of ADAM optimizer.")
+flags.DEFINE_float("adam_beta1", ADAM_BETA1,
+                   "Beta1 parameter of ADAM optimizer.")
+flags.DEFINE_float("adam_beta2", ADAM_BETA2,
+                   "Beta2 parameter of ADAM optimizer.")
+
 
 FLAGS = flags.FLAGS
 
@@ -522,6 +542,7 @@ def build_hyperparameter_dict(flags):
   d['con_dim'] = flags.con_dim
   # Optimization
   d['batch_size'] = flags.batch_size
+  d['valid_batch_size'] = flags.valid_batch_size
   d['learning_rate_init'] = flags.learning_rate_init
   d['learning_rate_decay_factor'] = flags.learning_rate_decay_factor
   d['learning_rate_stop'] = flags.learning_rate_stop
@@ -558,6 +579,12 @@ def build_hyperparameter_dict(flags):
   d['l2_start_step'] = flags.l2_start_step
   d['l2_increase_steps'] = flags.l2_increase_steps
 
+  # Loss scaling/Adam Optimizer Presets
+  d['loss_scale'] = flags.loss_scale
+  d['adam_epsilon'] = flags.adam_epsilon
+  d['beta1'] = flags.adam_beta1
+  d['beta2'] = flags.adam_beta2
+  
   return d
 
 class hps_dict_to_obj(dict):
