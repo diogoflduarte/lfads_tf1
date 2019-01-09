@@ -283,7 +283,12 @@ class LFADS(object):
                                     this_dataset_dims
 
         # apply cross-validation dropout
-        masked_dataset_ph = tf.div(masked_dataset_ph, self.cv_keep_ratio) * self.cv_binary_mask_batch
+        # change the cv dropout to randomly sample from empirical distribution
+        masked_dataset_ph = masked_dataset_ph * self.cv_binary_mask_batch + (1.-  self.cv_binary_mask_batch) * \
+                            tf.transpose(tf.random.shuffle(tf.transpose(tf.random.shuffle(self.dataset_ph), [1, 0, 2])), [1,0,2])
+        #masked_dataset_ph = tf.div(masked_dataset_ph, self.cv_keep_ratio) * self.cv_binary_mask_batch
+
+
         # add noise insteaad of zeroing the held-out samples
         #masked_noise = (1. - self.cv_binary_mask_batch) * tf.transpose(
         #    tf.random_shuffle(tf.transpose(tf.random_shuffle(self.dataset_ph), perm=[1,0,2])),

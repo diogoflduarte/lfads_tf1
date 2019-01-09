@@ -36,7 +36,6 @@ FACTORS_DIM = 50
 IC_ENC_DIM = 128
 GEN_DIM = 200
 BATCH_SIZE = 128
-VALID_BATCH_SIZE = 128
 LEARNING_RATE_INIT = 0.01
 LEARNING_RATE_DECAY_FACTOR = 0.95
 LEARNING_RATE_STOP = 0.00001
@@ -285,8 +284,8 @@ flags.DEFINE_integer("controller_input_lag", CONTROLLER_INPUT_LAG,
 # OPTIMIZATION
 flags.DEFINE_integer("batch_size", BATCH_SIZE,
                      "Batch size to use during training.")
-flags.DEFINE_integer("valid_batch_size", VALID_BATCH_SIZE,
-                     "Batch size to use during training.")
+flags.DEFINE_integer("valid_batch_size", BATCH_SIZE,
+                     "Batch size to use during validation.")
 flags.DEFINE_float("learning_rate_init", LEARNING_RATE_INIT,
                    "Learning rate initial value")
 flags.DEFINE_float("learning_rate_decay_factor", LEARNING_RATE_DECAY_FACTOR,
