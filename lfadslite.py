@@ -956,7 +956,10 @@ class LFADS(object):
 
             this_batch = data_extxd[example_idxs,:,:]
 
-            this_batch_cvmask = cv_rand_mask[example_idxs,:,:] if cv_rand_mask is not None else None
+            if run_type == "train":
+                this_batch_cvmask = None
+            else: # validation
+                this_batch_cvmask = cv_rand_mask[example_idxs, :, :] if cv_rand_mask is not None else None
 
             ext_input_batch = ext_input_bxtxi[example_idxs, :, :] if ext_input_bxtxi is not None else None
 
