@@ -56,11 +56,11 @@ def init_linear_transform(in_size, out_size, name=None, collections=None, mat_in
     # initialize the weights of the linear transformation based on the size of the inputs
 
     # initialze with a random distribuion
-    if mat_init_value:
-        mat_init = mat_init_value
-    else:
+    if mat_init_value is None:
         stddev = 1 / np.sqrt(float(in_size))
         mat_init = tf.random_normal_initializer(0.0, stddev, dtype=tf.float32)
+    else:
+        mat_init = mat_init_value
 
     # weight matrix
     w_collections = [tf.GraphKeys.GLOBAL_VARIABLES, "norm-variables"]
@@ -76,10 +76,10 @@ def init_linear_transform(in_size, out_size, name=None, collections=None, mat_in
     bname = (name + "/b") if name else "/b"
 
     if do_bias:
-        if bias_init_value:
-            b_init = bias_init_value
-        else:
+        if bias_init_value is None:
             b_init = tf.zeros_initializer()
+        else:
+            b_init = bias_init_value
         b = tf.get_variable(bname, [1, out_size],
                             initializer=b_init,
                             dtype=tf.float32)
