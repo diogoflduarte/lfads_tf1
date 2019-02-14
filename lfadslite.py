@@ -106,7 +106,7 @@ class LFADS(object):
             # we're going to try setting input dimensionality to None
             #  so datasets with different sizes can be used
             self.dataset_ph = tf.placeholder(tf.float32, shape = [None, hps['num_steps'], None], name='input_data')
-            self.cv_rand_mask = tf.placeholder(tf.float32, shape=[None, hps['num_steps'], None], name='cv_rand_mask')
+            self.cv_rand_mask_ph = tf.placeholder(tf.float32, shape=[None, hps['num_steps'], None], name='cv_rand_mask')
             # dropout keep probability
             #   enumerated in helper_funcs.kind_dict
             self.keep_prob = tf.placeholder(tf.float32, name='keep_prob')
@@ -122,17 +122,13 @@ class LFADS(object):
             # name of the dataset
             self.dataName = tf.placeholder(tf.string, shape=(), name='dataset_name')
             if hps['ext_input_dim'] > 0:
-                self.ext_input = tf.placeholder(tf.float32,
+                self.ext_input_ph = tf.placeholder(tf.float32,
                                       [None, hps['num_steps'], hps['ext_input_dim']],
                                       name="ext_input")
+                self.ext_input = self.ext_input_ph[:, hps.ic_enc_seg_len:, :]
+                self.ext_input = tf.nn.dropout(self.ext_input, self.keep_prob)
             else:
-                self.ext_input = None
-
-        if hps['ext_input_dim'] > 0:
-            self.ext_input = tf.nn.dropout(self.ext_input, self.keep_prob)
-        else:
-            self.ext_input = None
-
+                self.ext_input_ph = None
 
         # make placeholders for all the input and output adapter matrices
         ndatasets = hps.ndatasets
@@ -207,7 +203,7 @@ class LFADS(object):
             # Step 2) make a get the dataset dim (work around dim error in dynamic rnn)
             #dataset_dims[ d ] = hps.dataset_dims[ name ]
             # converting to tensor
-            fns_this_dataset_dims[ d ] = makelambda( tf.ones((hps['num_steps'], hps.dataset_dims[ name ])) )
+            fns_this_dataset_dims[ d ] = makelambda( tf.ones((hps.num_steps, hps.dataset_dims[ name ])) )
 
             #reset the np random seed to enforce randomness for the other random draws
             #np.random.seed()
@@ -261,53 +257,91 @@ class LFADS(object):
         this_dataset_out_fac_b = _case_with_no_default( pf_pairs_out_fac_bs )
         this_dataset_dims = _case_with_no_default( pf_pairs_this_dataset_dims )
                 
-        # apply dropout to the data
-        self.dataset_ph = tf.nn.dropout(self.dataset_ph, self.keep_prob)
-        # batch_size - read from the data placeholder
-        graph_batch_size = tf.shape(self.dataset_ph)[0]
-        # can we infer the data dimensionality for the random mask?
-        seq_len = hps['num_steps']
 
-        # coordinated dropout
-        if hps['keep_ratio'] != 1.0:
+        graph_batch_size = tf.shape(self.dataset_ph)[0]
+
+        # apply dropout to the data
+        self.dataset_in = tf.nn.dropout(self.dataset_ph, self.keep_prob) * \
+                          tf.expand_dims(tf.ones([graph_batch_size, 1]), 1) * this_dataset_dims
+        # batch_size - read from the data placeholder
+
+        # can we infer the data dimensionality for the random mask?
+
+        if hps.ic_enc_seg_len > 0:
+            # MRK: adjust the seq_len for causal modeling
+            ic_enc_seg_len = hps.ic_enc_seg_len
+            seq_len = hps.num_steps - ic_enc_seg_len
+            self.input_to_ic_encoder = self.dataset_in[:,:hps.ic_enc_seg_len,:]
+            print('Segment length for ic_enc: %d \nActual sequence length: %d' % (hps.ic_enc_seg_len, seq_len) )
+
+        self.dataset_in = self.dataset_in[:, hps.ic_enc_seg_len:, :]
+
+        # MRK: coordinated dropout
+        if hps.keep_ratio != 1.0:
             # coordinated dropout enabled on inputs
-            masked_dataset_ph, coor_drop_binary_mask = dropout(self.dataset_ph, self.keep_ratio)
+            # don't apply CD on ic_enc_segment
+            masked_dataset_in, coor_drop_binary_mask = dropout(self.dataset_in, self.keep_ratio)
         else:
             # no coordinated dropout
-            masked_dataset_ph = self.dataset_ph
+            masked_dataset_in = self.dataset_in
 
         # replicate the cross-validation binary mask for this dataset for all elements of the batch
         # work around error in dynamic rnn when input dim is None
+        # don't apply CV mask to ic_enc_segment
+        self.cv_rand_mask = self.cv_rand_mask_ph[:, hps.ic_enc_seg_len:, :]
+        self.cv_binary_mask_batch = self.cv_rand_mask * \
+                                    tf.expand_dims(tf.ones([graph_batch_size, 1]), 1) * \
+                                    this_dataset_dims[hps.ic_enc_seg_len:, :]
 
-        self.cv_binary_mask_batch = self.cv_rand_mask * tf.expand_dims(tf.ones([graph_batch_size, 1]), 1) * \
-                                    this_dataset_dims
-
-        # apply cross-validation dropout
+        # MRK: apply cross-validation dropout
         # change the cv dropout to randomly sample from empirical distribution
-        masked_dataset_ph = masked_dataset_ph * self.cv_binary_mask_batch + (1.-  self.cv_binary_mask_batch) * \
-                            tf.transpose(tf.random.shuffle(tf.transpose(tf.random.shuffle(self.dataset_ph), [1, 0, 2])), [1,0,2])
-        #masked_dataset_ph = tf.div(masked_dataset_ph, self.cv_keep_ratio) * self.cv_binary_mask_batch
+        masked_dataset_in = masked_dataset_in * self.cv_binary_mask_batch + (1. -  self.cv_binary_mask_batch) * \
+                            tf.transpose(
+                                tf.random.shuffle(
+                                    tf.transpose(
+                                        tf.random.shuffle(self.dataset_in), [1, 0, 2]
+                                    )
+                                ),
+                                [1, 0, 2])
 
+        self.input_to_ci_encoder = masked_dataset_in
+
+        # MRK: if hps.ic_enc_seg_len is 0, switch to non-causal mode
+        if hps.ic_enc_seg_len == 0:
+            # non-causal, original LFADS
+            self.input_to_ic_encoder = masked_dataset_in
+            seq_len = hps.num_steps
+            ic_enc_seg_len = seq_len
+
+        #masked_dataset_in = tf.div(masked_dataset_in, self.cv_keep_ratio) * self.cv_binary_mask_batch
 
         # add noise insteaad of zeroing the held-out samples
         #masked_noise = (1. - self.cv_binary_mask_batch) * tf.transpose(
-        #    tf.random_shuffle(tf.transpose(tf.random_shuffle(self.dataset_ph), perm=[1,0,2])),
+        #    tf.random_shuffle(tf.transpose(tf.random_shuffle(self.dataset_in), perm=[1,0,2])),
         #    perm=[1,0,2])
-        masked_dataset_ph = masked_dataset_ph * self.cv_binary_mask_batch #+ masked_noise
+        # masked_dataset_in = masked_dataset_in * self.cv_binary_mask_batch #+ masked_noise
 
         # define input to encoders
-        if hps.in_factors_dim==0:
-            self.input_to_encoders = masked_dataset_ph
-        else:
-            input_factors_object = LinearTimeVarying(inputs = masked_dataset_ph,
+        if hps.in_factors_dim > 0:
+            input_factors_object_ic = LinearTimeVarying(inputs = self.input_to_ic_encoder,
                                                     output_size = hps.in_factors_dim,
-                                                    transform_name = 'data_2_infactors',
-                                                    output_name = 'infactors',
+                                                    transform_name = 'data_2_infactors', # not used
+                                                    #output_name = 'infactors',
                                                     W = this_dataset_in_fac_W,
                                                     b = this_dataset_in_fac_b,
                                                     nonlinearity = None)
-            self.input_to_encoders = input_factors_object.output
-            
+
+            input_factors_object_ci = LinearTimeVarying(inputs = self.input_to_ci_encoder,
+                                                    output_size = hps.in_factors_dim,
+                                                    transform_name = 'data_2_infactors', # not used
+                                                    #output_name = 'infactors',
+                                                    W = this_dataset_in_fac_W,
+                                                    b = this_dataset_in_fac_b,
+                                                    nonlinearity = None)
+
+            self.input_to_ic_encoder = input_factors_object_ic.output
+            self.input_to_ci_encoder = input_factors_object_ci.output
+
         with tf.variable_scope('ic_enc'):
             #ic_enc_cell = CustomGRUCell(num_units = hps['ic_enc_dim'],\
             #                            batch_size = graph_batch_size,
@@ -320,8 +354,8 @@ class LFADS(object):
                 state_dim = hps['ic_enc_dim'],
                 batch_size = graph_batch_size,
                 name = 'ic_enc',
-                sequence_lengths = seq_len,
-                inputs = self.input_to_encoders,
+                sequence_lengths = ic_enc_seg_len, # causal vs non-causal
+                inputs = self.input_to_ic_encoder,
                 initial_state = None,
                 clip_value = hps['cell_clip_value'],
                 recurrent_collections='l2_ic_enc',
@@ -414,7 +448,7 @@ class LFADS(object):
                     batch_size = graph_batch_size,
                     name = 'ci_enc',
                     sequence_lengths = seq_len,
-                    inputs = self.input_to_encoders,
+                    inputs = self.input_to_ci_encoder,
                     initial_state = None,
                     rnn_type = 'gru',
                     recurrent_collections='l2_ci_enc',
@@ -592,7 +626,7 @@ class LFADS(object):
 
             # zero mean DiagonalGaussian
             self.cos_prior = DiagonalGaussian(
-                z_size = [graph_batch_size, hps['num_steps'], hps['co_dim']],
+                z_size = [graph_batch_size, seq_len, hps['co_dim']],
                 name='cos_prior', var = hps['co_prior_var'])
 
             # then build a posterior
@@ -632,19 +666,19 @@ class LFADS(object):
         # block gradients for coordinated dropout and cross-validation
         if hps.output_dist.lower() == 'poisson':
             masked_logrates = entry_stop_gradients(self.logrates, grad_binary_mask)
-            #self.loglikelihood_b_t = Poisson(masked_logrates).logp(self.dataset_ph)
-            self.loglikelihood_b_t = -tf.nn.log_poisson_loss( self.dataset_ph, masked_logrates, compute_full_loss=True )
+            #self.loglikelihood_b_t = Poisson(masked_logrates).logp(self.dataset_in)
+            self.loglikelihood_b_t = -tf.nn.log_poisson_loss( self.dataset_in, masked_logrates, compute_full_loss=True )
         elif hps.output_dist.lower() == 'gaussian':
             masked_output_mean = entry_stop_gradients(self.output_mean, grad_binary_mask)
             masked_output_logvar = entry_stop_gradients(self.output_logvar, grad_binary_mask)
-            self.loglikelihood_b_t = diag_gaussian_log_likelihood(self.dataset_ph,
+            self.loglikelihood_b_t = diag_gaussian_log_likelihood(self.dataset_in,
                                                                   masked_output_mean, masked_output_logvar)
         elif hps.output_dist.lower() == 'inverse-gamma':
             #masked_output_alpha = entry_stop_gradients(self.alpha, grad_binary_mask)
             masked_output_alpha = self.alpha;
             masked_output_beta = self.beta;
             #masked_output_beta = entry_stop_gradients(self.beta, grad_binary_mask)
-            self.loglikelihood_b_t = tf.contrib.distributions.InverseGamma( masked_output_alpha, masked_output_beta ).log_prob( self.dataset_ph )
+            self.loglikelihood_b_t = tf.contrib.distributions.InverseGamma( masked_output_alpha, masked_output_beta ).log_prob( self.dataset_in )
             #self.loglikelihood_b_t = InverseGamma( masked_output_alpha, masked_output;
             
         # cost for each trial
@@ -800,7 +834,7 @@ class LFADS(object):
       # CP: the following elements must be defined in a feed_dict for the graph to run
       # (each is a placeholder in the graph)
       #   self.dataName
-      #   self.dataset_ph
+      #   self.dataset_in
       #   self.kl_ic_weight
       #   self.kl_co_weight
       #   self.run_type
@@ -815,13 +849,13 @@ class LFADS(object):
       feed_dict[self.kl_weight] = kl_weight
       feed_dict[self.l2_weight] = l2_weight
 
-      if self.ext_input is not None and ext_input_bxtxi is not None:
-          feed_dict[self.ext_input] = ext_input_bxtxi
+      if ext_input_bxtxi and self.ext_input_ph:
+          feed_dict[self.ext_input_ph] = ext_input_bxtxi
 
       if cv_rand_mask is None:
-          feed_dict[self.cv_rand_mask] = np.ones_like(data_bxtxd)
+          feed_dict[self.cv_rand_mask_ph] = np.ones_like(data_bxtxd)
       else:
-          feed_dict[self.cv_rand_mask] = cv_rand_mask
+          feed_dict[self.cv_rand_mask_ph] = cv_rand_mask
 
       if run_type is None:
         feed_dict[self.run_type] = self.hps.kind
@@ -987,7 +1021,7 @@ class LFADS(object):
     #     session = tf.get_default_session()
     #     ops_to_eval = [self.train_op, self.total_cost, self.rec_cost_train, \
     #                          self.kl_cost, self.output_dist_params, self.learning_rate]
-    #     feed_dict = {self.dataset_ph: dict_from_py['dataset_ph'],
+    #     feed_dict = {self.dataset_in: dict_from_py['dataset_in'],
     #                  self.keep_prob: dict_from_py['keep_prob'],
     #                  self.keep_ratio: dict_from_py['keep_ratio'],
     #                  self.run_type: kind_dict("train")}
@@ -1169,8 +1203,9 @@ class LFADS(object):
                     elif hps.output_dist.lower() == 'inverse-gamma':
                         raise NameError("Not implemented!")
                     # Get R^2
-                    data_true = data_dict['valid_truth']
+                    data_true = data_dict['valid_truth'][:,hps.ic_enc_seg_len:,:]
                     data_cvmask = data_dict['valid_data_cvmask']
+                    if data_cvmask: data_cvmask = data_cvmask[:,hps.ic_enc_seg_len:,:]
                     heldin, heldout = self.get_R2(data_true, lfads_output, data_cvmask)
                     all_valid_R2_heldin.append(heldin)
                     all_valid_R2_heldout.append(heldout)
@@ -1188,8 +1223,10 @@ class LFADS(object):
                     elif hps.output_dist.lower() == 'inverse-gamma':
                         raise NameError("Not implemented!")
                     # Get R^2
-                    data_true = data_dict['train_truth']
+                    data_true = data_dict['train_truth'][:,hps.ic_enc_seg_len:,:]
                     data_cvmask = data_dict['train_data_cvmask']
+                    if data_cvmask: data_cvmask = data_cvmask[:, hps.ic_enc_seg_len:, :]
+
                     heldin, heldout = self.get_R2(data_true, lfads_output, data_cvmask)
                     all_train_R2_heldin.append(heldin)
                     all_train_R2_heldout.append(heldout)

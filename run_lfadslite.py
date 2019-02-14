@@ -34,6 +34,7 @@ L2_CI_ENC_2_CO_IN = 0.0
 IC_DIM = 64
 FACTORS_DIM = 50
 IC_ENC_DIM = 128
+IC_ENC_SEG_LEN = 0 # default, non-causal modeling
 GEN_DIM = 200
 BATCH_SIZE = 128
 VALID_BATCH_SIZE = 128
@@ -164,6 +165,8 @@ flags.DEFINE_integer("in_factors_dim", IN_FACTORS_DIM,
                      "Number of 'input factors' (encoders read from these)")
 flags.DEFINE_integer("ic_enc_dim", IC_ENC_DIM,
                      "Cell hidden size, encoder of h0")
+flags.DEFINE_integer("ic_enc_seg_len", IC_ENC_SEG_LEN,
+                     "Segment length passed to IC encoder for causal modeling")
 
 
 flags.DEFINE_integer("con_ci_enc_in_dim", CON_CI_ENC_IN_DIM,
@@ -515,6 +518,7 @@ def build_hyperparameter_dict(flags):
   d['ic_dim'] = flags.ic_dim
   d['factors_dim'] = flags.factors_dim
   d['ic_enc_dim'] = flags.ic_enc_dim
+  d['ic_enc_seg_len'] = flags.ic_enc_seg_len
   d['gen_dim'] = flags.gen_dim
 
   #lfadslite
