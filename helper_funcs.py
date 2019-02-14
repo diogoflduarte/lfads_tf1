@@ -59,15 +59,17 @@ def init_linear_transform(in_size, out_size, name=None, collections=None, mat_in
     if mat_init_value is None:
         stddev = 1 / np.sqrt(float(in_size))
         mat_init = tf.random_normal_initializer(0.0, stddev, dtype=tf.float32)
+        vshape = [in_size, out_size]
     else:
         mat_init = mat_init_value
+        vshape = None
 
     # weight matrix
     w_collections = [tf.GraphKeys.GLOBAL_VARIABLES, "norm-variables"]
     if collections:
         w_collections += collections
     wname = (name + "/W") if name else "/W"
-    w = tf.get_variable(wname, [in_size, out_size], initializer=mat_init,
+    w = tf.get_variable(wname, vshape, initializer=mat_init,
                         dtype=tf.float32, collections=w_collections)
     if normalized:
         w = tf.nn.l2_normalize(w, axis=0)
@@ -78,9 +80,11 @@ def init_linear_transform(in_size, out_size, name=None, collections=None, mat_in
     if do_bias:
         if bias_init_value is None:
             b_init = tf.zeros_initializer()
+            vshape = [1, out_size]
         else:
             b_init = bias_init_value
-        b = tf.get_variable(bname, [1, out_size],
+            vshape = None
+        b = tf.get_variable(bname, vshape,
                             initializer=b_init,
                             dtype=tf.float32)
     else:

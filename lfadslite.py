@@ -326,7 +326,7 @@ class LFADS(object):
             input_factors_object_ic = LinearTimeVarying(inputs = self.input_to_ic_encoder,
                                                     output_size = hps.in_factors_dim,
                                                     transform_name = 'data_2_infactors', # not used
-                                                    #output_name = 'infactors',
+                                                    output_name = 'infactors',
                                                     W = this_dataset_in_fac_W,
                                                     b = this_dataset_in_fac_b,
                                                     nonlinearity = None)
@@ -334,7 +334,7 @@ class LFADS(object):
             input_factors_object_ci = LinearTimeVarying(inputs = self.input_to_ci_encoder,
                                                     output_size = hps.in_factors_dim,
                                                     transform_name = 'data_2_infactors', # not used
-                                                    #output_name = 'infactors',
+                                                    output_name = 'infactors',
                                                     W = this_dataset_in_fac_W,
                                                     b = this_dataset_in_fac_b,
                                                     nonlinearity = None)
@@ -849,7 +849,7 @@ class LFADS(object):
       feed_dict[self.kl_weight] = kl_weight
       feed_dict[self.l2_weight] = l2_weight
 
-      if ext_input_bxtxi and self.ext_input_ph:
+      if self.ext_input_ph is not None and ext_input_bxtxi is not None:
           feed_dict[self.ext_input_ph] = ext_input_bxtxi
 
       if cv_rand_mask is None:
