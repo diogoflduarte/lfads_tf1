@@ -1399,7 +1399,7 @@ class LFADS(object):
         batches = [l[i:i + b] for i in xrange(0, len(l), b)]
         np_vals_flat = []
         for idx in batches:
-            ext_inputs = ext_input_bxtxi[idx] if ext_input_bxtxi else None
+            ext_inputs = ext_input_bxtxi[idx] if ext_input_bxtxi is not None else None
             feed_dict = self.build_feed_dict(data_name, data_bxtxd[idx], cv_rand_mask=np.ones_like(data_bxtxd[idx]),
         	    ext_input_bxtxi=ext_inputs, run_type=run_type,
                                          keep_prob=1.0, keep_ratio=1.0)
