@@ -266,7 +266,7 @@ class LFADS(object):
         # batch_size - read from the data placeholder
 
         # can we infer the data dimensionality for the random mask?
-
+        full_seq_len = hps.num_steps
         if hps.ic_enc_seg_len > 0:
             # MRK: adjust the seq_len for causal modeling
             ic_enc_seg_len = hps.ic_enc_seg_len
@@ -304,14 +304,15 @@ class LFADS(object):
                                 ),
                                 [1, 0, 2])
 
-        self.input_to_ci_encoder = masked_dataset_in
-
         # MRK: if hps.ic_enc_seg_len is 0, switch to non-causal mode
-        if hps.ic_enc_seg_len == 0:
+        if hps.ic_enc_seg_len > 0:
+            self.input_to_ci_encoder = tf.concat([self.input_to_ic_encoder, masked_dataset_in], axis=1)
+        else:
             # non-causal, original LFADS
             self.input_to_ic_encoder = masked_dataset_in
             seq_len = hps.num_steps
-            ic_enc_seg_len = seq_len
+            ic_enc_seg_len = 0
+            self.input_to_ci_encoder = masked_dataset_in
 
         #masked_dataset_in = tf.div(masked_dataset_in, self.cv_keep_ratio) * self.cv_binary_mask_batch
 
@@ -354,7 +355,7 @@ class LFADS(object):
                 state_dim = hps['ic_enc_dim'],
                 batch_size = graph_batch_size,
                 name = 'ic_enc',
-                sequence_lengths = ic_enc_seg_len, # causal vs non-causal
+                sequence_lengths = ic_enc_seg_len if ic_enc_seg_len else seq_len , # causal vs non-causal
                 inputs = self.input_to_ic_encoder,
                 initial_state = None,
                 clip_value = hps['cell_clip_value'],
@@ -447,7 +448,7 @@ class LFADS(object):
                     state_dim = hps['ci_enc_dim'],
                     batch_size = graph_batch_size,
                     name = 'ci_enc',
-                    sequence_lengths = seq_len,
+                    sequence_lengths = full_seq_len,
                     inputs = self.input_to_ci_encoder,
                     initial_state = None,
                     rnn_type = 'gru',
@@ -462,6 +463,7 @@ class LFADS(object):
                 else:
                     # if causal controller, only use the fwd rnn
                     [ci_enc_fwd_states, _]  = self.ci_enc_rnn_obj.states
+                    ci_enc_fwd_states = ci_enc_fwd_states[:,ic_enc_seg_len:,:]
                     if hps['controller_input_lag'] > 0:
                         toffset = hps['controller_input_lag']
                         leading_zeros = tf.zeros_like(ci_enc_fwd_states[:,0:toffset,:])
@@ -469,7 +471,7 @@ class LFADS(object):
                                                             ci_enc_fwd_states[:,0:-toffset,:]],
                                                            axis=1)
                     else:
-                        [self.ci_enc_rnn_states, _]  = self.ci_enc_rnn_obj.states
+                        self.ci_enc_rnn_states  = ci_enc_fwd_states
                 
                 # states from bidirec RNN come out as a tuple. concatenate those:
                 self.ci_enc_rnn_states = tf.concat(self.ci_enc_rnn_states,
@@ -849,7 +851,7 @@ class LFADS(object):
       feed_dict[self.kl_weight] = kl_weight
       feed_dict[self.l2_weight] = l2_weight
 
-      if self.ext_input_ph is not None and ext_input_bxtxi is not None:
+      if ext_input_bxtxi and self.ext_input_ph:
           feed_dict[self.ext_input_ph] = ext_input_bxtxi
 
       if cv_rand_mask is None:
