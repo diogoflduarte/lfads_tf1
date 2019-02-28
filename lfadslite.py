@@ -851,7 +851,7 @@ class LFADS(object):
       feed_dict[self.kl_weight] = kl_weight
       feed_dict[self.l2_weight] = l2_weight
 
-      if ext_input_bxtxi and self.ext_input_ph:
+      if ext_input_bxtxi is not None and self.ext_input_ph:
           feed_dict[self.ext_input_ph] = ext_input_bxtxi
 
       if cv_rand_mask is None:
