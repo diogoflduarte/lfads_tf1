@@ -314,7 +314,7 @@ class ComplexCell(LayerRNNCell):
         # MRK, fixed the following
         do_posterior_sample = tf.logical_or(tf.equal(self._run_type, tf.constant(kind_dict("train"))),
                                             tf.equal(self._run_type, tf.constant(kind_dict("posterior_sample_and_average"))))
-        co_out = tf.cond(do_posterior_sample, lambda: cos_posterior.sample(), lambda: cos_posterior.mean)
+        co_out = tf.cond(do_posterior_sample, lambda: cos_posterior.sample, lambda: cos_posterior.mean)
 
     # generator's inputs
     if self._ext_input_dim > 0 and self._inject_ext_input_to_gen:

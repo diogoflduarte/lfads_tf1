@@ -94,82 +94,6 @@ def init_linear_transform(in_size, out_size, name=None, collections=None, mat_in
     return (w, b)
 
 
-# needed for LFADS's linear
-def init_linear(in_size, out_size, do_bias=True, mat_init_value=None, alpha=1.0,
-                identity_if_possible=False, normalized=False,
-                name=None, collections=None):
-    """Linear (affine) transformation, y = x W + b, for a variety of
-    configurations.
-
-    Args:
-      in_size: The integer size of the non-batc input dimension. [(x),y]
-      out_size: The integer size of non-batch output dimension. [x,(y)]
-      do_bias (optional): Add a learnable bias vector to the operation.
-      mat_init_value (optional): numpy constant for matrix initialization, if None
-        , do random, with additional parameters.
-      alpha (optional): A multiplicative scaling for the weight initialization
-        of the matrix, in the form \alpha * 1/\sqrt{x.shape[1]}.
-      identity_if_possible (optional): just return identity,
-        if x.shape[1] == out_size.
-      normalized (optional): Option to divide out by the norms of the rows of W.
-      name (optional): The name prefix to add to variables.
-      collections (optional): List of additional collections. (Placed in
-        tf.GraphKeys.GLOBAL_VARIABLES already, so no need for that.)
-
-    Returns:
-      In the equation, y = x W + b, returns the pair (W, b).
-    """
-
-    if mat_init_value is not None and mat_init_value.shape != (in_size, out_size):
-        raise ValueError(
-            'Provided mat_init_value must have shape [%d, %d].' % (in_size, out_size))
-
-    if mat_init_value is None:
-        stddev = alpha / np.sqrt(float(in_size))
-        mat_init = tf.random_normal_initializer(0.0, stddev)
-
-    wname = (name + "/W") if name else "/W"
-
-    if identity_if_possible and in_size == out_size:
-        return (tf.constant(np.eye(in_size).astype(np.float32)),
-                tf.zeros(in_size))
-
-    # Note the use of get_variable vs. tf.Variable.  this is because get_variable
-    # does not allow the initialization of the variable with a value.
-    if normalized:
-        w_collections = [tf.GraphKeys.GLOBAL_VARIABLES, "norm-variables"]
-        if collections:
-            w_collections += collections
-        if mat_init_value is not None:
-            w = tf.Variable(mat_init_value, name=wname, collections=w_collections)
-        else:
-            w = tf.get_variable(wname, [in_size, out_size], initializer=mat_init,
-                                collections=w_collections)
-        w = tf.nn.l2_normalize(w, dim=0)  # x W, so xW_j = \sum_i x_bi W_ij
-    else:
-        w_collections = [tf.GraphKeys.GLOBAL_VARIABLES]
-        if collections:
-            w_collections += collections
-        if mat_init_value is not None:
-            w = tf.Variable(mat_init_value, name=wname, collections=w_collections)
-        else:
-            w = tf.get_variable(wname, [in_size, out_size], initializer=mat_init,
-                                collections=w_collections)
-    if do_bias:
-        b_collections = [tf.GraphKeys.GLOBAL_VARIABLES]
-        if collections:
-            b_collections += collections
-        bname = (name + "/b") if name else "/b"
-        b = tf.get_variable(bname, [1, out_size],
-                            initializer=tf.zeros_initializer(),
-                            )
-        # don't add biases to collections for l2 penalty
-        # collections=b_collections)
-    else:
-        b = None
-
-    return (w, b)
-
 def linear(x, out_size, name, collections=None, mat_init_value=None, bias_init_value=None):
     # generic function (we use linear transforms in a lot of places)
     # initialize the weights of the linear transformation based on the size of the inputs
@@ -205,11 +129,19 @@ class Gaussian(object):
     def logvar(self):
         return self.logvar_bxn
 
+    @property
     def noise(self):
-        return self.noise_bxn
+        return tf.random_normal(tf.shape(self.logvar))
 
+    @property
     def sample(self):
-        return self.mean + tf.exp(0.5 * self.logvar) * self.noise()
+        return self.mean + tf.exp(0.5 * self.logvar) * self.noise
+
+    #def noise(self):
+    #    return self.noise_bxn
+
+    #def sample(self):
+    #    return self.mean + tf.exp(0.5 * self.logvar) * self.noise()
 
 
 def diag_gaussian_log_likelihood(z, mu=0.0, logvar=0.0):
@@ -253,89 +185,105 @@ class DiagonalGaussianFromExisting(Gaussian):
     dimension.
     """
 
-    def __init__(self, mean_bxn, logvar_bxn):
+    def __init__(self, mean_bxn, logvar_bxn, var_min=0.0):
         self.mean_bxn = mean_bxn
+        if var_min > 0.0:
+            #logvar_bxn = tf.log(tf.exp(logvar_bxn) + var_min)
+            logvar_bxn = tf.nn.relu(logvar_bxn) + tf.log(var_min)
         self.logvar_bxn = logvar_bxn
-        self.noise_bxn = tf.random_normal(tf.shape(self.logvar_bxn))
 
+    def logp(self, z=None):
+        """Compute the log-likelihood under the distribution.
+
+        Args:
+          z (optional): value to compute likelihood for, if None, use sample.
+
+        Returns:
+          The likelihood of z under the model.
+        """
+        if z is None:
+          z = self.sample
+
+        # This is needed to make sure that the gradients are simple.
+        # The value of the function shouldn't change.
+        if z == self.sample:
+          return gaussian_pos_log_likelihood(self.mean, self.logvar, self.noise)
+
+        return diag_gaussian_log_likelihood(z, self.mean, self.logvar)
 
 class LearnableDiagonalGaussian(Gaussian):
     """Diagonal Gaussian with different constant mean and variances in each
     dimension.
     """
-    # MRK todo, Fix for co_dim > 0 (now it works only for co_dim=0)
-    
-    def __init__(self, batch_size, z_size, name, var):
+
+    def __init__(self, batch_size, z_size, name, var, trainable_mean=True, trainable_var=False):
         # MRK's fix, letting the mean of the prior to be trainable
         mean_init = 0.0
-        z_size_ = [1]+z_size
-        z_mean_1xn = tf.get_variable(name=name+"/mean", shape=z_size_,
-                                 initializer=tf.constant_initializer(mean_init))
-        if len(z_size) == 1:
-            self.mean_bxn =  tf.tile(z_mean_1xn, tf.stack([batch_size, 1]))
-            self.mean_bxn.set_shape([None, z_size[0]])
-        else:
-            self.mean_bxn = tf.tile(z_mean_1xn, tf.stack([batch_size, 1, 1]))
-            self.mean_bxn.set_shape([None] + z_size)
+        num_steps = z_size[0]
+        num_dim = z_size[1]
+        z_mean_1xn = tf.get_variable(name=name+"/mean", shape=[1,1,num_dim],
+                             initializer=tf.constant_initializer(mean_init), trainable=trainable_mean)
+        self.mean_bxn = tf.tile(z_mean_1xn, tf.stack([batch_size, num_steps, 1] ))
+        self.mean_bxn.set_shape([None] + z_size)
 
-        print(self.mean_bxn)
-        #
-        self.logvar_bxn = tf.log(tf.zeros([batch_size] + z_size) + var)
+        # MRK, make Var trainable (for Controller prior)
+        var_init = np.log(var)
+        z_logvar_1xn = tf.get_variable(name=name+"/logvar", shape=[1,1,num_dim],
+                                       initializer=tf.constant_initializer(var_init),
+                                       trainable=trainable_var)
+        self.logvar_bxn = tf.tile(z_logvar_1xn, tf.stack([batch_size, num_steps, 1]))
+        self.logvar_bxn.set_shape([None] + z_size)
+        # remove time axis if 1 (used for ICs)
+        if num_steps == 1:
+            self.mean_bxn = tf.squeeze(self.mean_bxn, axis=1)
+            self.logvar_bxn = tf.squeeze(self.logvar_bxn, axis=1)
+
         self.noise_bxn = tf.random_normal(tf.shape(self.logvar_bxn))
- 
 
-class DiagonalGaussian(object):
-  """Diagonal Gaussian with different constant mean and variances in each
-  dimension.
-  """
-
-  def __init__(self, batch_size, z_size, mean, logvar):
-    """Create a diagonal gaussian distribution.
-
-    Args:
-      batch_size: The size of the batch, i.e. 0th dim in 2D tensor of samples.
-      z_size: The dimension of the distribution, i.e. 1st dim in 2D tensor.
-      mean: The N-D mean of the distribution.
-      logvar: The N-D log variance of the diagonal distribution.
-    """
-    size__xz = [None, z_size]
-    self.mean = mean            # bxn already
-    self.logvar = logvar        # bxn already
-    self.noise = noise = tf.random_normal(tf.shape(logvar))
-    self.sample = mean + tf.exp(0.5 * logvar) * noise
-    mean.set_shape(size__xz)
-    logvar.set_shape(size__xz)
-    self.sample.set_shape(size__xz)
-
-  def logp(self, z=None):
-    """Compute the log-likelihood under the distribution.
-
-    Args:
-      z (optional): value to compute likelihood for, if None, use sample.
-
-    Returns:
-      The likelihood of z under the model.
-    """
-    if z is None:
-      z = self.sample
-
-    # This is needed to make sure that the gradients are simple.
-    # The value of the function shouldn't change.
-    if z == self.sample:
-      return gaussian_pos_log_likelihood(self.mean, self.logvar, self.noise)
-
-    return diag_gaussian_log_likelihood(z, self.mean, self.logvar)
+    # Not USED
+    # def logp(self, z=None):
+    #     """Compute the log-likelihood under the distribution.
+    #
+    #     Args:
+    #       z (optional): value to compute likelihood for, if None, use sample.
+    #
+    #     Returns:
+    #       The likelihood of z under the model.
+    #     """
+    #     if z is None:
+    #       z = self.sample()
+    #
+    #     # This is needed to make sure that the gradients are simple.
+    #     # The value of the function shouldn't change.
+    #     if z == self.sample:
+    #       return gaussian_pos_log_likelihood(self.mean, self.logvar, self.noise)
+    #
+    #     return diag_gaussian_log_likelihood(z, self.mean, self.logvar)
 
 
+# class DiagonalGaussian(Gaussian):
+#   """Diagonal Gaussian with different constant mean and variances in each
+#   dimension.
+#   """
+#
+#   def __init__(self, batch_size, z_size, mean, logvar):
+#     """Create a diagonal gaussian distribution.
+#
+#     Args:
+#       batch_size: The size of the batch, i.e. 0th dim in 2D tensor of samples.
+#       z_size: The dimension of the distribution, i.e. 1st dim in 2D tensor.
+#       mean: The N-D mean of the distribution.
+#       logvar: The N-D log variance of the diagonal distribution.
+#     """
+#     size__xz = [None, z_size]
+#     self.mean_bxn = mean            # bxn already
+#     self.logvar_bxn = logvar        # bxn already
+#     #self.noise = noise = tf.random_normal(tf.shape(logvar))
+#     #self.sample = mean + tf.exp(0.5 * logvar) * noise
+#     mean.set_shape(size__xz)
+#     logvar.set_shape(size__xz)
+#     #self.sample.set_shape(size__xz)
 
-class DiagonalGaussian(Gaussian):
-    """Diagonal Gaussian with different constant mean and variances in each
-    dimension.
-    """
-    def __init__(self, z_size, name, var):
-        self.mean_bxn = tf.zeros( z_size )
-        self.logvar_bxn = tf.log( tf.zeros( z_size ) + var)
-        self.noise_bxn = tf.random_normal( tf.shape( self.logvar_bxn ) )
 
 # NOT USED
 class GaussianProcess:
@@ -352,7 +300,7 @@ class LearnableAutoRegressive1Prior(GaussianProcess):
   def __init__(self, batch_size, z_size,
                autocorrelation_taus, noise_variances,
                do_train_prior_ar_atau, do_train_prior_ar_nvar,
-               num_steps, name):
+               name):
     """Create a learnable autoregressive (1) process.
 
     Args:
@@ -412,27 +360,6 @@ class LearnableAutoRegressive1Prior(GaussianProcess):
     # process mean (zero but included in for completeness)
     self.pmeans_bxu = pmeans_bxu = tf.zeros_like(phis_bxu)
 
-    # For sampling from the prior during de-novo generation.
-    self.means_t = means_t = [None] * num_steps
-    self.logvars_t = logvars_t = [None] * num_steps
-    self.samples_t = samples_t = [None] * num_steps
-    self.gaussians_t = gaussians_t = [None] * num_steps
-    sample_bxu = tf.zeros_like(phis_bxu)
-    for t in range(num_steps):
-      # process variance used here to make process completely stationary
-      if t == 0:
-        logvar_pt_bxu = self.logpvars_bxu
-      else:
-        logvar_pt_bxu = self.logevars_bxu
-
-      z_mean_pt_bxu = pmeans_bxu + phis_bxu * sample_bxu
-      gaussians_t[t] = DiagonalGaussian(batch_size, z_size,
-                                        mean=z_mean_pt_bxu,
-                                        logvar=logvar_pt_bxu)
-      sample_bxu = gaussians_t[t].sample
-      samples_t[t] = sample_bxu
-      logvars_t[t] = logvar_pt_bxu
-      means_t[t] = z_mean_pt_bxu
 
   def logp_t(self, z_t_bxu, z_tm1_bxu=None):
     """Compute the log-likelihood under the distribution for a given time t,
@@ -444,31 +371,31 @@ class LearnableAutoRegressive1Prior(GaussianProcess):
 
     Returns:
       The likelihood of p_t under the model at time t. i.e.
-        p(z_t|z_tm1) = N(z_tm1 * phis, eps^2)
+        p(z_t|z_tm1_bxu) = N(z_tm1_bxu * phis, eps^2)
 
     """
     if z_tm1_bxu is None:
-      return diag_gaussian_log_likelihood(z_t_bxu, self.pmeans_bxu,
+      logp_tgtm1_bxu = diag_gaussian_log_likelihood(z_t_bxu, self.pmeans_bxu,
                                           self.logpvars_bxu)
     else:
       means_t_bxu = self.pmeans_bxu + self.phis_bxu * z_tm1_bxu
       logp_tgtm1_bxu = diag_gaussian_log_likelihood(z_t_bxu,
                                                     means_t_bxu,
                                                     self.logevars_bxu)
-      return logp_tgtm1_bxu
+    return logp_tgtm1_bxu
 
-class DiagonalGaussianFromInput(Gaussian):
-    """Diagonal Gaussian taken as a linear transform of input.
-    """
-
-    def __init__(self, x, z_size, name, var_min=0.0):
-        # size_bxn = tf.stack([tf.shape(x)[0], z_size])
-        self.mean_bxn = linear(x, z_size, name=(name + "/mean"))
-        logvar_bxn = linear(x, z_size, name=(name + "/logvar"))
-        if var_min > 0.0:
-            logvar_bxn = tf.log(tf.exp(logvar_bxn) + var_min)
-        self.logvar_bxn = logvar_bxn
-        self.noise_bxn = tf.random_normal(tf.shape(self.logvar_bxn))
+# class DiagonalGaussianFromInput(Gaussian):
+#     """Diagonal Gaussian taken as a linear transform of input.
+#     """
+#
+#     def __init__(self, x, z_size, name, var_min=0.0):
+#         # size_bxn = tf.stack([tf.shape(x)[0], z_size])
+#         self.mean_bxn = linear(x, z_size, name=(name + "/mean"))
+#         logvar_bxn = linear(x, z_size, name=(name + "/logvar"))
+#         if var_min > 0.0:
+#             logvar_bxn = tf.log(tf.exp(logvar_bxn) + var_min)
+#         self.logvar_bxn = logvar_bxn
+#         self.noise_bxn = tf.random_normal(tf.shape(self.logvar_bxn))
 
 
 def makeInitialState(state_dim, batch_size, name):
@@ -531,11 +458,15 @@ class LinearTimeVarying(object):
     # self.output = linear transform
     # self.output_nl = nonlinear transform
 
-    def __init__(self, inputs, output_size, transform_name, output_name, nonlinearity=None,
+    def __init__(self, inputs, output_size, transform_name, nonlinearity=None,
                  collections=None, W=None, b=None, normalized=False, do_bias=True):
-        num_timesteps = tf.shape(inputs)[1]
+        # expand for 1 time step transform
+        #if len(inputs.get_shape()) == 2:
+        #    inputs = tf.expand_dims(inputs, [1])
+
+        num_timesteps = int(inputs.get_shape()[1])
         # must return "as_list" to get ints
-        input_size = inputs.get_shape().as_list()[2]
+        input_size = int(inputs.get_shape()[2])
         outputs = []
         outputs_nl = []
         # use any matrices provided, if they exist
@@ -637,7 +568,7 @@ class KLCost_GaussianGaussian(object):
             + tf.square((z.mean - prior_z.mean) / tf.exp(0.5 * prior_z.logvar))
             - 1.0, [1])
 
-        self.kl_cost_b = kl_b
+        self.kl_cost_b = tf.reduce_sum(kl_b, [1]) if len(kl_b.get_shape()) == 2 else kl_b
         self.kl_cost = tf.reduce_mean(kl_b)
 
 # NOT USED
@@ -667,21 +598,25 @@ class KLCost_GaussianGaussianProcessSampled(object):
     # L = -KL + log p(x|z), to maximize bound on likelihood
     # -L = KL - log p(x|z), to minimize bound on NLL
     # so 'KL cost' is postive KL divergence
-    z0_bxu = post_zs.sample()
-    logq_bxu = post_zs[0].logp(z0_bxu)
-    logp_bxu = prior_z_process.logp_t(z0_bxu)
-    z_tm1_bxu = z0_bxu
-    for z_t in post_zs[1:]:
-      # posterior is independent in time, prior is not
-      z_t_bxu = z_t.sample
-      logq_bxu += z_t.logp(z_t_bxu)
-      logp_bxu += prior_z_process.logp_t(z_t_bxu, z_tm1_bxu)
-      z_tm1 = z_t_bxu
 
-    kl_bxu = logq_bxu - logp_bxu
-    kl_b = tf.reduce_sum(kl_bxu, [1])
+    # sample from the posterior for all time points and dimensions
+    post_zs_sampled = post_zs.sample
+    # sum KL over time and dimension axis
+    logq_bxu = tf.reduce_sum(post_zs.logp(post_zs_sampled), [1,2])
+
+    logp_bxu = 0
+    num_steps = post_zs.mean.get_shape()[1]
+    for i in range(num_steps):
+      # posterior is independent in time, prior is not
+      if i == 0:
+          z_tm1_bxu = None
+      else:
+          z_tm1_bxu = post_zs_sampled[:, i-1, :]
+      logp_bxu += tf.reduce_sum(prior_z_process.logp_t(
+          post_zs_sampled[:,i,:], z_tm1_bxu), [1])
+
+    kl_b = logq_bxu - logp_bxu
     self.kl_cost_b = kl_b
-    self.kl_cost = tf.reduce_mean(kl_b)
 
 
 """Wrappers for primitive Neural Net (NN) Operations."""
@@ -694,6 +629,7 @@ from tensorflow.python.framework import tensor_util
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import random_ops
+
 
 
 # dropout that also returns the binary mask

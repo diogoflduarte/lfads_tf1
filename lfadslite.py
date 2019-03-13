@@ -14,7 +14,7 @@ import random
 # utils defined by CP
 from helper_funcs import linear, init_linear_transform, makeInitialState
 from helper_funcs import ListOfRandomBatches, kind_dict, kind_dict_key
-from helper_funcs import DiagonalGaussianFromInput, DiagonalGaussian, LearnableAutoRegressive1Prior
+from helper_funcs import LearnableAutoRegressive1Prior
 from helper_funcs import DiagonalGaussianFromExisting, LearnableDiagonalGaussian, diag_gaussian_log_likelihood
 from helper_funcs import LinearTimeVarying
 from helper_funcs import KLCost_GaussianGaussian, KLCost_GaussianGaussianProcessSampled
@@ -327,7 +327,6 @@ class LFADS(object):
             input_factors_object_ic = LinearTimeVarying(inputs = self.input_to_ic_encoder,
                                                     output_size = hps.in_factors_dim,
                                                     transform_name = 'data_2_infactors', # not used
-                                                    output_name = 'infactors',
                                                     W = this_dataset_in_fac_W,
                                                     b = this_dataset_in_fac_b,
                                                     nonlinearity = None)
@@ -335,7 +334,6 @@ class LFADS(object):
             input_factors_object_ci = LinearTimeVarying(inputs = self.input_to_ci_encoder,
                                                     output_size = hps.in_factors_dim,
                                                     transform_name = 'data_2_infactors', # not used
-                                                    output_name = 'infactors',
                                                     W = this_dataset_in_fac_W,
                                                     b = this_dataset_in_fac_b,
                                                     nonlinearity = None)
@@ -369,18 +367,22 @@ class LFADS(object):
             ic_enc_laststate_dropped = tf.nn.dropout(self.ic_enc_rnn_obj.last_tot, self.keep_prob)
             
             # map the ic_encoder onto the actual ic layer
-            self.gen_ics_posterior = DiagonalGaussianFromInput(
-                x = ic_enc_laststate_dropped,
-                z_size = hps['ic_dim'],
-                name = 'ic_enc_2_ics',
-                var_min = hps['ic_post_var_min'],
-            )
+            ics_mean = linear(ic_enc_laststate_dropped, hps.ic_dim, name='ic_enc_2_ics_mean')
+            ics_var = linear(ic_enc_laststate_dropped, hps.ic_dim, name='ic_enc_2_ics_var')
+
+            self.gen_ics_posterior = DiagonalGaussianFromExisting(ics_mean, ics_var, var_min=hps['ic_post_var_min'])
+            #self.gen_ics_posterior = DiagonalGaussianFromInput(
+            #    x = ic_enc_laststate_dropped,
+            #    z_size = hps['ic_dim'],
+            #    name = 'ic_enc_2_ics',
+            #    var_min = hps['ic_post_var_min'],
+            #)
             self.posterior_zs_g0 = self.gen_ics_posterior
 
         # to go forward, either sample from the posterior, or take mean
         do_posterior_sample = tf.logical_or(tf.equal(self.run_type, tf.constant(kind_dict("train"))),
             tf.equal(self.run_type, tf.constant(kind_dict("posterior_sample_and_average"))))
-        self.gen_ics_lowd = tf.cond(do_posterior_sample, lambda:self.gen_ics_posterior.sample(), 
+        self.gen_ics_lowd = tf.cond(do_posterior_sample, lambda:self.gen_ics_posterior.sample,
             lambda:self.gen_ics_posterior.mean)
 
 
@@ -430,7 +432,6 @@ class LFADS(object):
                 self.fac_obj = LinearTimeVarying(inputs = gen_states_dropped,
                                                  output_size = hps['factors_dim'],
                                                  transform_name = 'gen_2_factors',
-                                                 output_name = 'factors_concat',
                                                  collections='l2_gen_2_factors',
                                                  do_bias = False,
                                                  normalized=True
@@ -485,7 +486,6 @@ class LFADS(object):
                 #        inputs=self.ci_enc_rnn_states,
                 #        output_size = hps['con_ci_enc_in_dim'],
                 #        transform_name = 'ci_enc_2_co_in',
-                #       output_name = 'ci_enc_output_concat',
                 #        nonlinearity = None,
                 #        collections='l2_ci_enc_2_co_in')
                 #    self.ci_enc_outputs = self.ci_enc_object.output
@@ -575,7 +575,6 @@ class LFADS(object):
             rates_object = LinearTimeVarying(inputs = self.factors,
                                              output_size = output_size,
                                              transform_name = 'factors_2_rates',
-                                             output_name = 'rates_concat',
                                              W = this_dataset_out_fac_W,
                                              b = this_dataset_out_fac_b,
                                              nonlinearity = nonlin)
@@ -596,15 +595,17 @@ class LFADS(object):
                 self.beta = tf.nn.relu( self.beta ) + 1 
                 self.output_dist_params=rates_object.output
 
-
         ## calculate the KL cost
         # g0 - build a prior distribution to compare to
         self.gen_ics_prior = LearnableDiagonalGaussian(
             batch_size=graph_batch_size,
-            z_size = [hps['ic_dim']], name='gen_ics_prior',
-            var = hps['ic_prior_var'])
+            z_size=[1, hps['ic_dim']],
+            name='gen_ics_prior',
+            var=hps['ic_prior_var'],
+            trainable_mean=True,
+            trainable_var=False)
         self.prior_zs_g0 = self.gen_ics_prior
-        
+
         # g0 KL cost for each trial
         self.kl_cost_g0_b = KLCost_GaussianGaussian(self.gen_ics_posterior,
                                                     self.gen_ics_prior).kl_cost_b
@@ -627,17 +628,22 @@ class LFADS(object):
             #                                  hps['num_steps'], "u_prior_ar1")
 
             # zero mean DiagonalGaussian
-            self.cos_prior = DiagonalGaussian(
-                z_size = [graph_batch_size, seq_len, hps['co_dim']],
-                name='cos_prior', var = hps['co_prior_var'])
+            #self.cos_prior = DiagonalGaussian(
+            #    z_size = [graph_batch_size, seq_len, hps['co_dim']],
+            #    name='cos_prior', var = hps['co_prior_var'])
+
+            # MRK This is the prior - zero mean DiagonalGaussian with trainable variance
+            self.cos_prior = LearnableDiagonalGaussian(batch_size=graph_batch_size,
+               z_size = [hps['num_steps'], hps['co_dim']],
+               name='cos_prior', var = hps['co_prior_var'],
+               trainable_mean = False, trainable_var = True)
 
             # then build a posterior
             self.cos_posterior = DiagonalGaussianFromExisting(
                 self.co_mean_states,
                 self.co_logvar_states)
 
-            #print(self.co_mean_states)
-            # MRK, changed this to LFADS'
+            # MRK, calculate KL in GP (for AR prior)
             #self.kl_cost_co_b_t = \
             #    KLCost_GaussianGaussianProcessSampled(
             #        self.cos_posterior, self.cos_prior).kl_cost_b
@@ -645,10 +651,11 @@ class LFADS(object):
             # CO KL cost per timestep
             self.kl_cost_co_b_t = KLCost_GaussianGaussian(self.cos_posterior,
                                                           self.cos_prior).kl_cost_b
+
             # CO KL cost for the batch
-            self.kl_cost_co = tf.reduce_mean(
-                tf.reduce_mean(self.kl_cost_co_b_t, [1]) )
+            self.kl_cost_co = tf.reduce_mean(self.kl_cost_co_b_t)
             self.kl_cost += self.kl_cost_co * self.kl_co_weight
+
 
 
         ## calculate reconstruction cost
@@ -992,10 +999,10 @@ class LFADS(object):
 
             this_batch = data_extxd[example_idxs,:,:]
 
-            if run_type == "train":
-                this_batch_cvmask = None
-            else: # validation
-                this_batch_cvmask = cv_rand_mask[example_idxs, :, :] if cv_rand_mask is not None else None
+            #if run_type == "train":
+            #    this_batch_cvmask = None
+            #else: # validation
+            this_batch_cvmask = cv_rand_mask[example_idxs, :, :] if cv_rand_mask is not None else None
 
             ext_input_batch = ext_input_bxtxi[example_idxs, :, :] if ext_input_bxtxi is not None else None
 
