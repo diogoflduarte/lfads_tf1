@@ -466,7 +466,7 @@ class LinearTimeVarying(object):
 
         num_timesteps = int(inputs.get_shape()[1])
         # must return "as_list" to get ints
-        input_size = int(inputs.get_shape()[2])
+        input_size = inputs.get_shape().as_list()[2]
         outputs = []
         outputs_nl = []
         # use any matrices provided, if they exist
