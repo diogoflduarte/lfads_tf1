@@ -73,7 +73,7 @@ class BidirectionalDynamicRNN(object):
         elif rnn_type.lower() == 'customgru':
             self.cell = GRUCell(num_units = state_dim,
                                       #batch_size = batch_size,
-                                      #clip_value = clip_value,
+                                      clip_value = clip_value,
                                       recurrent_collections = recurrent_collections
                                       )
         else:
@@ -159,7 +159,7 @@ class DynamicRNN(object):
         elif rnn_type.lower() == 'customgru':
             self.cell = GRUCell(num_units = state_dim,
                                       #batch_size = batch_size,
-                                      #clip_value = clip_value,
+                                      clip_value = clip_value,
                                       recurrent_collections = recurrent_collections
                                       )
         else:
@@ -180,7 +180,7 @@ class DynamicRNN(object):
         self.states, self.last = tf.nn.dynamic_rnn(
             cell=self.cell,
             dtype=tf.float32,
-            # sequence_length = sequence_lengths,
+            #sequence_length = sequence_lengths,
             inputs=inputs,
             initial_state=self.init,
         )

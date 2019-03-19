@@ -24,7 +24,7 @@ DEVICE = "gpu:0" # "cpu:0", or other gpus, e.g. "gpu:1"
 PS_NEXAMPLES_TO_PROCESS = int(1e8) # if larger than number of examples, process all
 
 # L2 weights
-L2_GEN_SCALE = 0.0
+L2_GEN_SCALE = 2000.0
 L2_CON_SCALE = 0.0
 L2_IC_ENC_SCALE = 0.0
 L2_CI_ENC_SCALE = 0.0
@@ -87,6 +87,7 @@ IC_PRIOR_VAR = 0.1
 IC_POST_VAR_MIN = 0.0001      # protection from KL blowing up
 CO_PRIOR_VAR = 0.1
 CO_POST_VAR_MIN = 0.0001
+
 KL_START_STEP = 0
 L2_START_STEP = 0
 KL_INCREASE_STEPS = 500
@@ -141,7 +142,6 @@ flags.DEFINE_integer("ps_nexamples_to_process", PS_NEXAMPLES_TO_PROCESS,
 flags.DEFINE_integer("max_ckpt_to_keep_lve", MAX_CKPT_TO_KEEP_LVE,
                  "Max # of checkpoints to keep for lowest validation error \
                  models (rolling)")
-
 
 
 # GENERATION
@@ -284,7 +284,7 @@ flags.DEFINE_integer("controller_input_lag", CONTROLLER_INPUT_LAG,
 # OPTIMIZATION
 flags.DEFINE_integer("batch_size", BATCH_SIZE,
                      "Batch size to use during training.")
-flags.DEFINE_integer("valid_batch_size", BATCH_SIZE,
+flags.DEFINE_integer("valid_batch_size", None,
                      "Batch size to use during validation.")
 flags.DEFINE_float("learning_rate_init", LEARNING_RATE_INIT,
                    "Learning rate initial value")
@@ -526,6 +526,7 @@ def build_hyperparameter_dict(flags):
   d['ic_post_var_min'] = flags.ic_post_var_min
   d['co_prior_var'] = flags.co_prior_var
   d['co_post_var_min'] = flags.co_post_var_min
+
   # Controller
   d['do_causal_controller'] = flags.do_causal_controller
   d['controller_input_lag'] = flags.controller_input_lag
@@ -541,7 +542,7 @@ def build_hyperparameter_dict(flags):
   d['con_dim'] = flags.con_dim
   # Optimization
   d['batch_size'] = flags.batch_size
-  d['valid_batch_size'] = flags.valid_batch_size
+  d['valid_batch_size'] = flags.batch_size if flags.valid_batch_size is None else flags.valid_batch_size
   d['learning_rate_init'] = flags.learning_rate_init
   d['learning_rate_decay_factor'] = flags.learning_rate_decay_factor
   d['learning_rate_stop'] = flags.learning_rate_stop

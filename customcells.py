@@ -2,7 +2,7 @@ import tensorflow as tf
 from tensorflow.python.ops.rnn_cell_impl import LayerRNNCell
 from helper_funcs import linear, kind_dict
 from helper_funcs import DiagonalGaussianFromExisting
-
+import numpy as np
 
 class GRUCell(LayerRNNCell):
   """Gated Recurrent Unit cell (cf. http://arxiv.org/abs/1406.1078).
@@ -30,7 +30,8 @@ class GRUCell(LayerRNNCell):
                bias_initializer=None,
                name=None,
                dtype=None,
-               recurrent_collections=None):
+               recurrent_collections=None,
+               clip_value=np.inf):
     super(GRUCell, self).__init__(_reuse=reuse, name=name, dtype=dtype)
 
     # Inputs must be 2-dimensional.
@@ -41,6 +42,7 @@ class GRUCell(LayerRNNCell):
     self._kernel_initializer = kernel_initializer
     self._bias_initializer = bias_initializer
     self._rec_collections = recurrent_collections
+    self._clip_value = clip_value
 
   @property
   def state_size(self):
@@ -125,6 +127,8 @@ class GRUCell(LayerRNNCell):
 
     c = self._activation(candidate)
     new_h = u * state + (1 - u) * c
+    # clip by value (not part of the stock GRU) :
+    new_h = tf.clip_by_value(new_h, -self._clip_value, self._clip_value)
     return new_h, new_h
 
 
@@ -157,6 +161,7 @@ class ComplexCell(LayerRNNCell):
                keep_prob,
                var_min=None,
                activation=None,
+               clip_value=np.inf,
                reuse=None,
                kernel_initializer=None,
                bias_initializer=None,
@@ -186,6 +191,7 @@ class ComplexCell(LayerRNNCell):
     self._factors_dim = factors_dim
     self._ext_input_dim = ext_input_dim
     self._keep_prob = keep_prob
+    self._clip_value = clip_value
 
 
   @property
@@ -269,6 +275,8 @@ class ComplexCell(LayerRNNCell):
 
     c = self._activation(candidate)
     new_h = u * state + (1 - u) * c
+    # clip by value (not part of the stock GRU) :
+    new_h = tf.clip_by_value(new_h, -self._clip_value, self._clip_value)
     return new_h
 
   def call(self, inputs, state):
@@ -314,7 +322,7 @@ class ComplexCell(LayerRNNCell):
         # MRK, fixed the following
         do_posterior_sample = tf.logical_or(tf.equal(self._run_type, tf.constant(kind_dict("train"))),
                                             tf.equal(self._run_type, tf.constant(kind_dict("posterior_sample_and_average"))))
-        co_out = tf.cond(do_posterior_sample, lambda: cos_posterior.sample(), lambda: cos_posterior.mean)
+        co_out = tf.cond(do_posterior_sample, lambda: cos_posterior.sample, lambda: cos_posterior.mean)
 
     # generator's inputs
     if self._ext_input_dim > 0 and self._inject_ext_input_to_gen:
