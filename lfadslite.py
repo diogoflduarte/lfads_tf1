@@ -129,6 +129,7 @@ class LFADS(object):
                 self.ext_input = tf.nn.dropout(self.ext_input, self.keep_prob)
             else:
                 self.ext_input_ph = None
+                self.ext_input = None
 
         # make placeholders for all the input and output adapter matrices
         ndatasets = hps.ndatasets
