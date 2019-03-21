@@ -464,7 +464,7 @@ class LinearTimeVarying(object):
         #if len(inputs.get_shape()) == 2:
         #    inputs = tf.expand_dims(inputs, [1])
 
-        num_timesteps = int(inputs.get_shape()[1])
+        num_timesteps = tf.shape(inputs)[1]
         # must return "as_list" to get ints
         input_size = inputs.get_shape().as_list()[2]
         outputs = []
