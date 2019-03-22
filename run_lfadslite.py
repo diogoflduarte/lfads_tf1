@@ -86,7 +86,6 @@ KL_CO_WEIGHT = 1.0
 IC_PRIOR_VAR = 0.1
 IC_POST_VAR_MIN = 0.0001      # protection from KL blowing up
 CO_PRIOR_VAR = 0.1
-CO_POST_VAR_MIN = 0.0001
 
 KL_START_STEP = 0
 L2_START_STEP = 0
@@ -204,8 +203,6 @@ flags.DEFINE_float("ic_prior_var", IC_PRIOR_VAR,
 flags.DEFINE_float("ic_post_var_min", IC_POST_VAR_MIN,
                    "Minimum variance of IC posterior distribution.")
 flags.DEFINE_float("co_prior_var", CO_PRIOR_VAR,
-                   "Variance of control input prior distribution.")
-flags.DEFINE_float("co_post_var_min", CO_POST_VAR_MIN,
                    "Variance of control input prior distribution.")
 
 
@@ -525,7 +522,6 @@ def build_hyperparameter_dict(flags):
   d['ic_prior_var'] = flags.ic_prior_var
   d['ic_post_var_min'] = flags.ic_post_var_min
   d['co_prior_var'] = flags.co_prior_var
-  d['co_post_var_min'] = flags.co_post_var_min
 
   # Controller
   d['do_causal_controller'] = flags.do_causal_controller

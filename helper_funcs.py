@@ -5,8 +5,6 @@ from __future__ import print_function
 import numpy as np
 import tensorflow as tf
 import os
-import h5py
-import json
 import sys
 import warnings
 import errno
@@ -261,37 +259,8 @@ class LearnableDiagonalGaussian(Gaussian):
     #     return diag_gaussian_log_likelihood(z, self.mean, self.logvar)
 
 
-# class DiagonalGaussian(Gaussian):
-#   """Diagonal Gaussian with different constant mean and variances in each
-#   dimension.
-#   """
-#
-#   def __init__(self, batch_size, z_size, mean, logvar):
-#     """Create a diagonal gaussian distribution.
-#
-#     Args:
-#       batch_size: The size of the batch, i.e. 0th dim in 2D tensor of samples.
-#       z_size: The dimension of the distribution, i.e. 1st dim in 2D tensor.
-#       mean: The N-D mean of the distribution.
-#       logvar: The N-D log variance of the diagonal distribution.
-#     """
-#     size__xz = [None, z_size]
-#     self.mean_bxn = mean            # bxn already
-#     self.logvar_bxn = logvar        # bxn already
-#     #self.noise = noise = tf.random_normal(tf.shape(logvar))
-#     #self.sample = mean + tf.exp(0.5 * logvar) * noise
-#     mean.set_shape(size__xz)
-#     logvar.set_shape(size__xz)
-#     #self.sample.set_shape(size__xz)
-
-
 # NOT USED
-class GaussianProcess:
-  """Base class for Gaussian processes."""
-  pass
-
-# NOT USED
-class LearnableAutoRegressive1Prior(GaussianProcess):
+class LearnableAutoRegressive1Prior(object):
   """AR(1) model where autocorrelation and process variance are learned
   parameters.  Assumed zero mean.
 
@@ -384,19 +353,6 @@ class LearnableAutoRegressive1Prior(GaussianProcess):
                                                     self.logevars_bxu)
     return logp_tgtm1_bxu
 
-# class DiagonalGaussianFromInput(Gaussian):
-#     """Diagonal Gaussian taken as a linear transform of input.
-#     """
-#
-#     def __init__(self, x, z_size, name, var_min=0.0):
-#         # size_bxn = tf.stack([tf.shape(x)[0], z_size])
-#         self.mean_bxn = linear(x, z_size, name=(name + "/mean"))
-#         logvar_bxn = linear(x, z_size, name=(name + "/logvar"))
-#         if var_min > 0.0:
-#             logvar_bxn = tf.log(tf.exp(logvar_bxn) + var_min)
-#         self.logvar_bxn = logvar_bxn
-#         self.noise_bxn = tf.random_normal(tf.shape(self.logvar_bxn))
-
 
 def makeInitialState(state_dim, batch_size, name):
     init_stddev = 1 / np.sqrt(float(state_dim))
@@ -411,13 +367,11 @@ def makeInitialState(state_dim, batch_size, name):
     return init_state_tiled
 
 
-
-
 class LinearTimeVarying_NEW(object):
     # self.output = linear transform
     # self.output_nl = nonlinear transform
 
-    def __init__(self, inputs, output_size, transform_name, output_name=None, nonlinearity=None,
+    def __init__(self, inputs, output_size, transform_name, nonlinearity=None,
                  collections=None, W=None, b=None, normalized=False, do_bias=True):
         num_timesteps = tf.shape(inputs)[1]
         # must return "as_list" to get ints
@@ -442,16 +396,20 @@ class LinearTimeVarying_NEW(object):
         # initial_outputs_nl = tf.TensorArray(dtype=tf.float32, size=num_timesteps, name='init_nl_outputs')
 
         # MRK: replaced tf.while_loop with a simple tf.matmul
-        tiled_W = tf.tile(W, [tf.shape(inputs)[0], 1])
-        tiled_W = tf.reshape(tiled_W, [-1, W.get_shape()[0], W.get_shape()[1]])
+        #tiled_W = tf.tile(W, [tf.shape(inputs)[0], 1])
+        #tiled_W = tf.reshape(tiled_W, [-1, W.get_shape()[0], W.get_shape()[1]])
+        #tiled_b = tf.tile(b, [tf.shape(inputs)[0], 1])
+        #tiled_b = tf.reshape(tiled_b, [-1, b.get_shape()[0], b.get_shape()[1]])
+        #output = tf.matmul(inputs, tiled_W) + tiled_b
 
-        tiled_b = tf.tile(b, [tf.shape(inputs)[0], 1])
-        tiled_b = tf.reshape(tiled_b, [-1, b.get_shape()[0], b.get_shape()[1]])
+        tiled_W = tf.tile(tf.expand_dims(W, 0), [tf.shape(inputs)[0], 1, 1])
+        tiled_b = tf.tile(tf.expand_dims(b, 0), [tf.shape(inputs)[0], 1, 1])
         output = tf.matmul(inputs, tiled_W) + tiled_b
+
         if nonlinearity is 'exp':
             output_nl = tf.exp(output)
             self.output_nl = output_nl
-        print('NEW TIMEVARYING USED')
+        #print('NEW TIMEVARYING USED')
         self.output = output
 
 class LinearTimeVarying(object):
@@ -463,10 +421,9 @@ class LinearTimeVarying(object):
         # expand for 1 time step transform
         #if len(inputs.get_shape()) == 2:
         #    inputs = tf.expand_dims(inputs, [1])
-
-        num_timesteps = int(inputs.get_shape()[1])
+        num_timesteps = tf.shape(inputs)[1]
         # must return "as_list" to get ints
-        input_size = int(inputs.get_shape()[2])
+        input_size = inputs.get_shape().as_list()[2]
         outputs = []
         outputs_nl = []
         # use any matrices provided, if they exist

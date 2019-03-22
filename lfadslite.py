@@ -262,19 +262,19 @@ class LFADS(object):
         this_dataset_dims = _case_with_no_default( pf_pairs_this_dataset_dims )
                 
         # apply dropout to the data
-        self.dataset_ph = tf.nn.dropout(self.dataset_ph, self.keep_prob)
+        dataset_ph_dropped = tf.nn.dropout(self.dataset_ph, self.keep_prob)
         # batch_size - read from the data placeholder
-        graph_batch_size = tf.shape(self.dataset_ph)[0]
+        graph_batch_size = tf.shape(dataset_ph_dropped)[0]
         # can we infer the data dimensionality for the random mask?
         seq_len = hps['num_steps']
 
         # coordinated dropout
         if hps['keep_ratio'] != 1.0:
             # coordinated dropout enabled on inputs
-            masked_dataset_ph, coor_drop_binary_mask = dropout(self.dataset_ph, self.keep_ratio)
+            masked_dataset_ph, coor_drop_binary_mask = dropout(dataset_ph_dropped, self.keep_ratio)
         else:
             # no coordinated dropout
-            masked_dataset_ph = self.dataset_ph
+            masked_dataset_ph = dataset_ph_dropped
 
         # replicate the cross-validation binary mask for this dataset for all elements of the batch
         # work around error in dynamic rnn when input dim is None
@@ -502,7 +502,6 @@ class LFADS(object):
                                              co_dim=hps['co_dim'],
                                              ext_input_dim=hps['ext_input_dim'],
                                              inject_ext_input_to_gen=True,
-                                             var_min = hps['co_post_var_min'],
                                              run_type = self.run_type,
                                              keep_prob=self.keep_prob,
                                              clip_value=hps['cell_clip_value'])
@@ -578,8 +577,6 @@ class LFADS(object):
         # g0 KL cost for each trial
         self.kl_cost_g0_b = KLCost_GaussianGaussian(self.gen_ics_posterior,
                                                     self.gen_ics_prior).kl_cost_b
-        print('g0:')
-        print(self.kl_cost_g0_b.get_shape())
         # g0 KL cost for the whole batch
         self.kl_cost_g0 = tf.reduce_mean(self.kl_cost_g0_b)
         # total KL cost
