@@ -73,6 +73,7 @@ class LFADS(object):
         #CELL_TYPE = 'lstm'
         #CELL_TYPE = 'gru'
         CELL_TYPE = 'customgru'
+        print('This is a REDUCE_MEAN lfadslite.')
 
         # to stop certain gradients paths through the graph in backprop
         def entry_stop_gradients(target, mask):
@@ -262,10 +263,10 @@ class LFADS(object):
         graph_batch_size = tf.shape(self.dataset_ph)[0]
 
         # apply dropout to the data
-        self.dataset_in = tf.nn.dropout(self.dataset_ph, self.keep_prob) * \
+        self.dataset_in_orig = self.dataset_ph * \
                           tf.expand_dims(tf.ones([graph_batch_size, 1]), 1) * this_dataset_dims
         # batch_size - read from the data placeholder
-
+        self.dataset_in = tf.nn.dropout(self.dataset_in_orig, self.keep_prob)
         # can we infer the data dimensionality for the random mask?
         full_seq_len = hps.num_steps
         if hps.ic_enc_seg_len > 0:
@@ -276,7 +277,7 @@ class LFADS(object):
             print('Segment length for ic_enc: %d \nActual sequence length: %d' % (hps.ic_enc_seg_len, seq_len) )
 
         self.dataset_in = self.dataset_in[:, hps.ic_enc_seg_len:, :]
-
+        self.dataset_in_orig = self.dataset_in_orig[:, hps.ic_enc_seg_len:, :]
         # MRK: coordinated dropout
         if hps.keep_ratio != 1.0:
             # coordinated dropout enabled on inputs
@@ -537,7 +538,6 @@ class LFADS(object):
                                              co_dim=hps['co_dim'],
                                              ext_input_dim=hps['ext_input_dim'],
                                              inject_ext_input_to_gen=True,
-                                             var_min = hps['co_post_var_min'],
                                              run_type = self.run_type,
                                              keep_prob=self.keep_prob)
 
@@ -677,18 +677,18 @@ class LFADS(object):
         if hps.output_dist.lower() == 'poisson':
             masked_logrates = entry_stop_gradients(self.logrates, grad_binary_mask)
             #self.loglikelihood_b_t = Poisson(masked_logrates).logp(self.dataset_in)
-            self.loglikelihood_b_t = -tf.nn.log_poisson_loss( self.dataset_in, masked_logrates, compute_full_loss=True )
+            self.loglikelihood_b_t = -tf.nn.log_poisson_loss( self.dataset_in_orig, masked_logrates, compute_full_loss=True )
         elif hps.output_dist.lower() == 'gaussian':
             masked_output_mean = entry_stop_gradients(self.output_mean, grad_binary_mask)
             masked_output_logvar = entry_stop_gradients(self.output_logvar, grad_binary_mask)
-            self.loglikelihood_b_t = diag_gaussian_log_likelihood(self.dataset_in,
+            self.loglikelihood_b_t = diag_gaussian_log_likelihood(self.dataset_in_orig,
                                                                   masked_output_mean, masked_output_logvar)
         elif hps.output_dist.lower() == 'inverse-gamma':
             #masked_output_alpha = entry_stop_gradients(self.alpha, grad_binary_mask)
             masked_output_alpha = self.alpha;
             masked_output_beta = self.beta;
             #masked_output_beta = entry_stop_gradients(self.beta, grad_binary_mask)
-            self.loglikelihood_b_t = tf.contrib.distributions.InverseGamma( masked_output_alpha, masked_output_beta ).log_prob( self.dataset_in )
+            self.loglikelihood_b_t = tf.contrib.distributions.InverseGamma( masked_output_alpha, masked_output_beta ).log_prob( self.dataset_in_orig )
             #self.loglikelihood_b_t = InverseGamma( masked_output_alpha, masked_output;
             
         # cost for each trial
