@@ -49,10 +49,6 @@ DO_TRAIN_ENCODER_ONLY = False
 # flag to allow training the readin (alignment) matrices (only used in cases where alignment matrices are used
 DO_TRAIN_READIN = True
 
-# lfadslite parameter - sets the dimensionality between ci_enc and controller
-CON_CI_ENC_IN_DIM = 10
-# lfadslite parameter - sets the dimensionality between factors and controller
-CON_FAC_IN_DIM = 10
 # lfadslite param -
 #     sets whether there is an "input_factors" layer (for multi-session data, or even if you want to reduce the dimensionality of a single session)
 IN_FACTORS_DIM = 0
@@ -163,11 +159,6 @@ flags.DEFINE_integer("in_factors_dim", IN_FACTORS_DIM,
 flags.DEFINE_integer("ic_enc_dim", IC_ENC_DIM,
                      "Cell hidden size, encoder of h0")
 
-
-flags.DEFINE_integer("con_ci_enc_in_dim", CON_CI_ENC_IN_DIM,
-                     "Dimensionality of (time-varying) input to the controller that comes from the controller input encoder (ci_enc)")
-flags.DEFINE_integer("con_fac_in_dim", CON_FAC_IN_DIM,
-                     "Dimensionality of (time-varying) input to the controller that comes from the factors")
 
 # Controlling the size of the generator is one way to control complexity of
 # the dynamics (there is also l2, which will squeeze out unnecessary
@@ -514,8 +505,6 @@ def build_hyperparameter_dict(flags):
   d['gen_dim'] = flags.gen_dim
 
   #lfadslite
-  d['con_ci_enc_in_dim'] = flags.con_ci_enc_in_dim
-  d['con_fac_in_dim'] = flags.con_fac_in_dim
   d['in_factors_dim'] = flags.in_factors_dim
 
   # KL distributions

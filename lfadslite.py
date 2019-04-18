@@ -16,13 +16,13 @@ from helper_funcs import linear, init_linear_transform, makeInitialState
 from helper_funcs import ListOfRandomBatches, kind_dict, kind_dict_key
 from helper_funcs import LearnableAutoRegressive1Prior
 from helper_funcs import DiagonalGaussianFromExisting, LearnableDiagonalGaussian, diag_gaussian_log_likelihood
-from helper_funcs import LinearTimeVarying
+from helper_funcs import LinearTimeVarying, Poisson
 from helper_funcs import KLCost_GaussianGaussian, KLCost_GaussianGaussianProcessSampled
 from data_funcs import write_data
 from helper_funcs import printer, mkdir_p
 #from plot_funcs import plot_data, close_all_plots
 #from data_funcs import read_datasets
-from customcells import ComplexCell
+from customcells import ComplexCell, complex_rnn
 from rnn_helper_funcs import BidirectionalDynamicRNN, DynamicRNN
 from helper_funcs import dropout
 
@@ -71,8 +71,8 @@ class LFADS(object):
     def __init__(self, hps, datasets = None):
 
         #CELL_TYPE = 'lstm'
-        #CELL_TYPE = 'gru'
-        CELL_TYPE = 'customgru'
+        CELL_TYPE = 'gru'
+        #CELL_TYPE = 'customgru'
 
         # to stop certain gradients paths through the graph in backprop
         def entry_stop_gradients(target, mask):
@@ -109,6 +109,7 @@ class LFADS(object):
             self.cv_rand_mask = tf.placeholder(tf.float32, shape=[None, hps['num_steps'], None], name='cv_rand_mask')
             # dropout keep probability
             #   enumerated in helper_funcs.kind_dict
+            self.is_training = tf.placeholder(tf.bool, name='is_training')
             self.keep_prob = tf.placeholder(tf.float32, name='keep_prob')
             self.keep_ratio = tf.placeholder(tf.float32, name='keep_ratio')
 
@@ -167,6 +168,7 @@ class LFADS(object):
             in_mat_cxf = None
             align_bias_1xc = None
             in_bias_1xf = None
+
             if hps.in_factors_dim > 0:
                 # get the alignment_matrix if provided
                 if 'alignment_matrix_cxf' in datasets[ name ].keys():
@@ -288,12 +290,10 @@ class LFADS(object):
                             tf.transpose(tf.random.shuffle(tf.transpose(tf.random.shuffle(self.dataset_ph), [1, 0, 2])), [1,0,2])
         #masked_dataset_ph = tf.div(masked_dataset_ph, self.cv_keep_ratio) * self.cv_binary_mask_batch
 
-
         # add noise insteaad of zeroing the held-out samples
         #masked_noise = (1. - self.cv_binary_mask_batch) * tf.transpose(
         #    tf.random_shuffle(tf.transpose(tf.random_shuffle(self.dataset_ph), perm=[1,0,2])),
         #    perm=[1,0,2])
-        masked_dataset_ph = masked_dataset_ph * self.cv_binary_mask_batch #+ masked_noise
 
         # define input to encoders
         if hps.in_factors_dim==0:
@@ -331,9 +331,13 @@ class LFADS(object):
             # wrap the last state with a dropout layer
             #ic_enc_laststate_dropped = self.ic_enc_rnn_obj.last_tot
             ic_enc_laststate_dropped = tf.nn.dropout(self.ic_enc_rnn_obj.last_tot, self.keep_prob)
-            
+
+            #ic_enc_laststate_dropped = tf.layers.batch_normalization(ic_enc_laststate_dropped, training=self.is_training)
+
             ics_mean = linear(ic_enc_laststate_dropped, hps.ic_dim, name='ic_enc_2_ics_mean')
             ics_logvar = linear(ic_enc_laststate_dropped, hps.ic_dim, name='ic_enc_2_ics_var')
+
+
 
             self.gen_ics_posterior = DiagonalGaussianFromExisting(ics_mean, ics_logvar, var_min=hps['ic_post_var_min'])
 
@@ -351,9 +355,10 @@ class LFADS(object):
             tf.equal(self.run_type, tf.constant(kind_dict("posterior_sample_and_average"))))
         self.gen_ics_lowd = tf.cond(do_posterior_sample, lambda:self.gen_ics_posterior.sample,
             lambda:self.gen_ics_posterior.mean)
+        # MRKT
+        # self.gen_ics_lowd = self.gen_ics_posterior.mean
 
 
-        
         with tf.variable_scope('generator'):
             # lstms have twice the number of state dims as everybody else (h and c cells) - correct for that here.
             if CELL_TYPE.lower() == 'lstm':
@@ -361,11 +366,13 @@ class LFADS(object):
             else:
                 self.gen_ics = linear(self.gen_ics_lowd, hps['gen_dim'], name='ics_2_g0')
 
-
+        # MRKT
+        # self.gen_ics = tf.zeros_like(self.gen_ics)
+        
         ### CONTROLLER construction
         # this should only be done if a controller is requested
         # if not, skip all these graph elements like so:
-        if hps['co_dim'] == 0:
+        if False: # hps['co_dim'] == 0:
             with tf.variable_scope('generator'):
                 #gen_cell = CustomGRUCell(num_units = hps['gen_dim'],
                 #                         batch_size = graph_batch_size,
@@ -401,16 +408,16 @@ class LFADS(object):
                                                  transform_name = 'gen_2_factors',
                                                  collections='l2_gen_2_factors',
                                                  do_bias = False,
-                                                 normalized=True
-                )
+                                                 normalized=True)
                 self.factors = self.fac_obj.output
         else:
-            with tf.variable_scope('ci_enc'):
+            pass
 
-                #ci_enc_cell = CustomGRUCell(num_units = hps['ci_enc_dim'],\
-                #                            batch_size = graph_batch_size,
-                #                            clip_value = hps['cell_clip_value'],
-                #                            recurrent_collections=['l2_ci_enc'])
+        assert hps.co_dim >= 0, 'co_dim must be equal or greater than 0 !'
+
+        if hps.co_dim > 0:
+            print('Controller is used.')
+            with tf.variable_scope('ci_enc'):
                 ## ci_encoder
                 self.ci_enc_rnn_obj = BidirectionalDynamicRNN(
                     state_dim = hps['ci_enc_dim'],
@@ -419,113 +426,126 @@ class LFADS(object):
                     sequence_lengths = seq_len,
                     inputs = self.input_to_encoders,
                     initial_state = None,
-                    rnn_type = 'gru',
+                    rnn_type = CELL_TYPE,
                     recurrent_collections='l2_ci_enc',
                     clip_value = hps['cell_clip_value'])
                 
-                #    output_keep_prob = self.keep_prob
-                #    cell = ci_enc_cell,
+                toffset = hps['controller_input_lag']
 
                 if not hps['do_causal_controller']:
-                    self.ci_enc_rnn_states = self.ci_enc_rnn_obj.states
+                    # MRK, fix, added the lag for non-causal case
+                    [ci_enc_fwd_states, ci_enc_rev_states] = self.ci_enc_rnn_obj.states
+                    if hps['controller_input_lag'] > 0:
+                        ci_enc_fwd_states = tf.concat([tf.zeros_like(ci_enc_fwd_states[:,0:toffset,:]),
+                                                                ci_enc_fwd_states[:,0:-toffset,:]],
+                                                               axis=1)
+                        ci_enc_rev_states = tf.concat([ ci_enc_rev_states[:,toffset:,:],
+                                                        tf.zeros_like(ci_enc_rev_states[:, -toffset:, :])],
+                                                        axis=1)
+                    self.ci_enc_rnn_states = [ci_enc_fwd_states, ci_enc_rev_states]
                 else:
                     # if causal controller, only use the fwd rnn
                     [ci_enc_fwd_states, _]  = self.ci_enc_rnn_obj.states
+
                     if hps['controller_input_lag'] > 0:
-                        toffset = hps['controller_input_lag']
                         leading_zeros = tf.zeros_like(ci_enc_fwd_states[:,0:toffset,:])
                         self.ci_enc_rnn_states = tf.concat([leading_zeros,
                                                             ci_enc_fwd_states[:,0:-toffset,:]],
                                                            axis=1)
                     else:
                         [self.ci_enc_rnn_states, _]  = self.ci_enc_rnn_obj.states
+                        #self.ci_enc_rnn_states = ci_enc_fwd_states
                 
-                # states from bidirec RNN come out as a tuple. concatenate those:
-                self.ci_enc_rnn_states = tf.concat(self.ci_enc_rnn_states,
-                                                   axis=2, name='ci_enc_rnn_states')
-
-                ## take a linear transform of the ci_enc output
-                #    this is to lower the dimensionality of the ci_enc
-                #with tf.variable_scope('ci_enc_2_co_in'):
-                #    # one input from the encoder, another will come back from factors
-                #    self.ci_enc_object = LinearTimeVarying(
-                #        inputs=self.ci_enc_rnn_states,
-                #        output_size = hps['con_ci_enc_in_dim'],
-                #        transform_name = 'ci_enc_2_co_in',
-                #        nonlinearity = None,
-                #        collections='l2_ci_enc_2_co_in')
-                #    self.ci_enc_outputs = self.ci_enc_object.output
-
-                # pass ci_enc output directly to the controller
                 self.ci_enc_outputs = self.ci_enc_rnn_states
-            ## the controller, controller outputs, generator, and factors are implemented
-            #     in one RNN whose individual cell is "complex"
-            #  this is required do to feedback pathway from factors->controller.
-            #    impossible to dynamically unroll with separate RNNs.
-            with tf.variable_scope('complexcell'):
-                # the "complexcell" architecture requires an initial state definition
-                # have to define states for each of the components, then concatenate them
-                con_init_state = makeInitialState(hps['con_dim'],
+                used_con_dim = hps['con_dim']
+        else:
+            # dummy inputs to dynamic rnn, not used for anything
+            self.ci_enc_outputs = tf.zeros([graph_batch_size, seq_len, 0])
+            used_con_dim = 0
+
+        # self.ci_enc_outputs = tf.layers.batch_normalization(self.ci_enc_outputs, training=self.is_training)
+        # this is used for co_dim == 0 and co_dim > 0
+        ## the controller, controller outputs, generator, and factors are implemented
+        #     in one RNN whose individual cell is "complex"
+        #  this is required do to feedback pathway from factors->controller.
+        #    impossible to dynamically unroll with separate RNNs.
+        with tf.variable_scope('complexcell'):
+            # the "complexcell" architecture requires an initial state definition
+            # have to define states for each of the components, then concatenate them
+            #'''
+            con_init_state = makeInitialState(used_con_dim,
+                                              graph_batch_size,
+                                              'controller')
+            co_mean_init_state = makeInitialState(hps['co_dim'],
                                                   graph_batch_size,
-                                                  'controller')
-                co_mean_init_state = makeInitialState(hps['co_dim'],
-                                                      graph_batch_size,
-                                                      'controller_output_mean')
-                co_logvar_init_state = makeInitialState(hps['co_dim'],
-                                                        graph_batch_size,
-                                                        'controller_output_logvar')
-                co_sample_init_state = makeInitialState(hps['co_dim'],
-                                                        graph_batch_size,
-                                                        'controller_output_sample')
-                fac_init_state = makeInitialState(hps['factors_dim'],
-                                                  graph_batch_size,
-                                                  'factor')
-                comcell_init_state = [con_init_state, self.gen_ics,
-                                           co_mean_init_state, co_logvar_init_state,
-                                           co_sample_init_state, fac_init_state]
-                self.complexcell_init_state = tf.concat(axis=1, values = comcell_init_state)
+                                                  'controller_output_mean')
+            co_logvar_init_state = makeInitialState(hps['co_dim'],
+                                                    graph_batch_size,
+                                                    'controller_output_logvar')
+            co_sample_init_state = makeInitialState(hps['co_dim'],
+                                                    graph_batch_size,
+                                                    'controller_output_sample')
+            fac_init_state = makeInitialState(hps['factors_dim'],
+                                              graph_batch_size,
+                                              'factor')
+            comcell_init_state = [self.gen_ics, con_init_state,
+                                       co_mean_init_state, co_logvar_init_state,
+                                       co_sample_init_state, fac_init_state]
+
+            self.complexcell_init_state = tf.concat(axis=1, values = comcell_init_state)
+
+            # here is what the state vector will look like
+            self.comcell_state_dims = [hps['gen_dim'],
+                                       used_con_dim,
+                                       hps['co_dim'], # for the controller output means
+                                       hps['co_dim'], # for the variances
+                                       hps['co_dim'], # for the sampled controller output
+                                       hps['factors_dim']]
 
 
-                # here is what the state vector will look like
-                self.comcell_state_dims = [hps['gen_dim'],
-                                           hps['con_dim'],
-                                           hps['co_dim'], # for the controller output means
-                                           hps['co_dim'], # for the variances
-                                           hps['co_dim'], # for the sampled controller output
-                                           hps['factors_dim']]
+            # construct the complexcell
+            self.complexcell=ComplexCell(num_units_gen=hps['gen_dim'],
+                                         num_units_con=used_con_dim,
+                                         factors_dim=hps['factors_dim'],
+                                         co_dim=hps['co_dim'],
+                                         ext_input_dim=hps['ext_input_dim'],
+                                         inject_ext_input_to_gen=True,
+                                         run_type = self.run_type,
+                                         keep_prob=self.keep_prob,
+                                         clip_value=hps['cell_clip_value'],
+                                         is_training=self.is_training
+                                         )
 
+            # construct the actual RNN
+            #   its inputs are the output of the controller_input_enc
 
-                # construct the complexcell
-                self.complexcell=ComplexCell(num_units_gen=hps['gen_dim'],
-                                             num_units_con=hps['con_dim'],
-                                             factors_dim=hps['factors_dim'],
-                                             co_dim=hps['co_dim'],
-                                             ext_input_dim=hps['ext_input_dim'],
-                                             inject_ext_input_to_gen=True,
-                                             run_type = self.run_type,
-                                             keep_prob=self.keep_prob,
-                                             clip_value=hps['cell_clip_value'])
+            if hps['ext_input_dim']:
+                complex_cell_inputs = tf.concat(axis=2, values = [self.ci_enc_outputs, self.ext_input])
+            else:
+                complex_cell_inputs = self.ci_enc_outputs
+            self.complex_outputs, self.complex_final_state =\
+            tf.nn.dynamic_rnn(self.complexcell,
+                              inputs = complex_cell_inputs,
+                              initial_state = self.complexcell_init_state,
+                              dtype=tf.float32)
 
-                # construct the actual RNN
-                #   its inputs are the output of the controller_input_enc
+            # split the states of the individual RNNs
+            # from the packed "complexcell" state
 
-                if hps['ext_input_dim']:
-                    complex_cell_inputs = tf.concat(axis=2, values = [self.ci_enc_outputs, self.ext_input])
-                else:
-                    complex_cell_inputs = self.ci_enc_outputs
-                self.complex_outputs, self.complex_final_state =\
-                tf.nn.dynamic_rnn(self.complexcell,
-                                  inputs = complex_cell_inputs,
-                                  initial_state = self.complexcell_init_state)
+            self.gen_states, self.con_states, self.co_mean_states, self.co_logvar_states, self.controller_outputs, self.factors =\
+            tf.split(self.complex_outputs,
+                     self.comcell_state_dims,
+                     axis=2)
+            #'''
+            #if hps['ext_input_dim']:
+            #    complex_cell_inputs = tf.concat(axis=2, values = [self.ci_enc_outputs, self.ext_input])
+            #else:
+            #    complex_cell_inputs = self.ci_enc_outputs
 
-                # split the states of the individual RNNs
-                # from the packed "complexcell" state
-                self.gen_states, self.con_states, self.co_mean_states, self.co_logvar_states, self.controller_outputs, self.factors =\
-                tf.split(self.complex_outputs,
-                         self.comcell_state_dims,
-                         axis=2)
+            #self.gen_states, self.con_states, self.co_mean_states, self.co_logvar_states, self.controller_outputs, self.factors =\
+            #complex_rnn(hps,(graph_batch_size, seq_len, ), self.gen_ics, complex_cell_inputs, hps['ext_input_dim'], self.keep_prob, self.run_type)
 
-        # now back to code that runs for all models
+                # now back to code that runs for all models
         with tf.variable_scope('rates'):
             ## "rates" - more properly called "output_distribution"
             if hps.output_dist.lower() == 'poisson':
@@ -578,54 +598,52 @@ class LFADS(object):
         self.kl_cost_g0_b = KLCost_GaussianGaussian(self.gen_ics_posterior,
                                                     self.gen_ics_prior).kl_cost_b
         # g0 KL cost for the whole batch
-        self.kl_cost_g0 = tf.reduce_mean(self.kl_cost_g0_b)
-        # total KL cost
-        self.kl_cost = self.kl_cost_g0 * self.kl_ic_weight
+        self.kl_cost_g0 = self.kl_cost_g0_b * self.kl_ic_weight
+
+        self.kl_cost_co = tf.constant(0.0)
         if hps['co_dim'] > 0:
             # if there are controller outputs, calculate a KL cost for them
             # first build a prior to compare to
             # Controller outputs
 
-            # MRK, fix, implement Auto Regressive prior
-            # autocorrelation_taus = [hps.prior_ar_atau for _ in range(hps.co_dim)]
-            # noise_variances = [hps.prior_ar_nvar for _ in range(hps.co_dim)]
-            # self.cos_prior = \
-            # LearnableAutoRegressive1Prior(graph_batch_size, hps.co_dim,
-            #                               autocorrelation_taus,
-            #                               noise_variances,
-            #                               hps.do_train_prior_ar_atau,
-            #                               hps.do_train_prior_ar_nvar,
-            #                               "u_prior_ar1")
-
-            # zero mean DiagonalGaussian
-            #self.cos_prior = DiagonalGaussian(
-            #    z_size = [graph_batch_size, hps['num_steps'], hps['co_dim']],
-            #    name='cos_prior', var = hps['co_prior_var'])
-
-            # This is the prior - zero mean DiagonalGaussian with trainable variance
-            self.cos_prior = LearnableDiagonalGaussian(batch_size=graph_batch_size,
-               z_size = [hps['num_steps'], hps['co_dim']],
-               name='cos_prior', var = hps['co_prior_var'],
-               trainable_mean = False, trainable_var = True)
-
-            # then build a posterior
+            # posterior on controller output
             self.cos_posterior = DiagonalGaussianFromExisting(
                 self.co_mean_states,
                 self.co_logvar_states)
 
-            # MRK, calculate KL in GP (for AR prior)
-            #self.kl_cost_co_b_t = \
-            #    KLCost_GaussianGaussianProcessSampled(
-            #        self.cos_posterior, self.cos_prior).kl_cost_b
+            use_ar_prior = True
+            # choose to use the AR implementation or diag gaussian implementation
+            if use_ar_prior:
+                # MRK, fix, implement Auto Regressive prior
+                autocorrelation_taus = [hps.prior_ar_atau for _ in range(hps.co_dim)]
+                noise_variances = [hps.prior_ar_nvar for _ in range(hps.co_dim)]
+                self.cos_prior = \
+                LearnableAutoRegressive1Prior(graph_batch_size, hps.co_dim,
+                                            autocorrelation_taus,
+                                            noise_variances,
+                                            hps.do_train_prior_ar_atau,
+                                            hps.do_train_prior_ar_nvar,
+                                            "u_prior_ar1")
 
-            # CO KL cost per timestep
-            self.kl_cost_co_b_t = KLCost_GaussianGaussian(self.cos_posterior,
-                                                          self.cos_prior).kl_cost_b
+                # MRK, calculate KL in GP (for AR prior)
+                self.kl_cost_co_b_t = \
+                    KLCost_GaussianGaussianProcessSampled(
+                        self.cos_posterior, self.cos_prior).kl_cost_b
+            else:
+                # This is the prior - zero mean DiagonalGaussian with trainable variance
+                self.cos_prior = LearnableDiagonalGaussian(batch_size=graph_batch_size,
+                   z_size = [hps['num_steps'], hps['co_dim']],
+                   name='cos_prior', var = hps['co_prior_var'],
+                   trainable_mean = False, trainable_var = True)
+                # CO KL cost per timestep
+                self.kl_cost_co_b_t = KLCost_GaussianGaussian(self.cos_posterior,
+                                                              self.cos_prior).kl_cost_b
 
             # CO KL cost for the batch
-            self.kl_cost_co = tf.reduce_mean(self.kl_cost_co_b_t)
-            self.kl_cost += self.kl_cost_co * self.kl_co_weight
+            self.kl_cost_co = self.kl_cost_co_b_t * self.kl_co_weight
 
+        # average over the batch dim only
+        self.kl_cost = tf.reduce_mean(self.kl_cost_g0 + self.kl_cost_co)
 
         ## calculate reconstruction cost
         # get final mask for gradient blocking
@@ -643,7 +661,8 @@ class LFADS(object):
 
         # block gradients for coordinated dropout and cross-validation
         if hps.output_dist.lower() == 'poisson':
-            masked_logrates = entry_stop_gradients(self.logrates, grad_binary_mask)
+            #masked_logrates = entry_stop_gradients(self.logrates, grad_binary_mask)
+            masked_logrates = self.logrates
             #self.loglikelihood_b_t = Poisson(masked_logrates).logp(self.dataset_ph)
             self.loglikelihood_b_t = -tf.nn.log_poisson_loss( self.dataset_ph, masked_logrates, compute_full_loss=True )
         elif hps.output_dist.lower() == 'gaussian':
@@ -668,8 +687,9 @@ class LFADS(object):
         #self.rec_cost_train = -self.log_p_train
         #ones_ratio = tf.reduce_mean(self.cv_binary_mask_batch)
 
-        self.rec_cost_train = - (1. / self.cv_keep_ratio) * \
-                              tf.reduce_sum(self.loglikelihood_b_t * self.cv_binary_mask_batch) / tf.cast(graph_batch_size, tf.float32)
+        #self.rec_cost_train = - (1. / self.cv_keep_ratio) * \
+        #                      tf.reduce_sum(self.loglikelihood_b_t * self.cv_binary_mask_batch) / tf.cast(graph_batch_size, tf.float32)
+        self.rec_cost_train = -tf.reduce_sum(tf.reduce_mean(self.loglikelihood_b_t, axis=0))
         #self.rec_cost_train = - tf.reduce_sum(self.loglikelihood_b_t * self.cv_binary_mask_batch) / graph_batch_size
         #self.rec_cost_train /= ones_ratio
 
@@ -756,6 +776,8 @@ class LFADS(object):
         self.train_op = self.opt.apply_gradients(
             zip(self.gradients, self.trainable_vars), global_step = self.train_step)
 
+        #update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        #self.train_op = tf.group([self.train_op, update_ops])
         # hooks to save down model checkpoints:
         # "save every so often" (i.e., recent checkpoints)
         self.seso_saver = tf.train.Saver(tf.global_variables(),
@@ -790,7 +812,7 @@ class LFADS(object):
     ## functions to interface with the outside world
     def build_feed_dict(self, train_name, data_bxtxd, cv_rand_mask=None, ext_input_bxtxi=None, run_type=None,
                         keep_prob=None, kl_ic_weight=1.0, kl_co_weight=1.0,
-                        keep_ratio=None, kl_weight=1.0, l2_weight=1.0):
+                        keep_ratio=None, kl_weight=1.0, l2_weight=1.0, is_training=False):
       """Build the feed dictionary, handles cases where there is no value defined.
 
       Args:
@@ -821,6 +843,8 @@ class LFADS(object):
       feed_dict[self.kl_co_weight] = kl_co_weight
       feed_dict[self.kl_weight] = kl_weight
       feed_dict[self.l2_weight] = l2_weight
+      feed_dict[self.is_training] = is_training
+
 
       if self.ext_input is not None and ext_input_bxtxi is not None:
           feed_dict[self.ext_input] = ext_input_bxtxi
@@ -928,7 +952,7 @@ class LFADS(object):
     def run_epoch(self, datasets, kl_ic_weight, kl_co_weight, dataset_type = "train", run_type="train",
                   kl_weight=1.0, l2_weight=1.0):
         ops_to_eval = [self.total_cost, self.rec_cost_train, self.rec_cost_valid,
-                       self.kl_cost, self.l2_cost]
+                       self.kl_cost, self.l2_cost, self.grad_global_norm]
         # get a full list of all data for this type (train/valid)
         all_name_example_idx_pairs = \
           self.shuffle_and_flatten_datasets(datasets, dataset_type)
@@ -947,9 +971,11 @@ class LFADS(object):
             ops_to_eval.append(self.train_op)
             keep_prob = self.hps.keep_prob
             keep_ratio = self.hps.keep_ratio
+            is_training = True
         else:
             keep_prob = 1.0
             keep_ratio = 1.0
+            is_training = False
             
         session = tf.get_default_session()
 
@@ -976,12 +1002,13 @@ class LFADS(object):
                                              kl_co_weight = kl_co_weight,
                                              keep_ratio=keep_ratio,
                                              kl_weight=kl_weight,
-                                             l2_weight=l2_weight)
+                                             l2_weight=l2_weight,
+                                             is_training=is_training)
             evald_ops_this_batch = session.run(ops_to_eval, feed_dict = feed_dict)
             # for training runs, there is an extra output argument. kill it
-            if len(evald_ops_this_batch) > 5:
-                tc, rc, rc_v, kl, l2, _= evald_ops_this_batch
-                evald_ops_this_batch = (tc, rc, rc_v, kl, l2)
+            if len(evald_ops_this_batch) > 6:
+                tc, rc, rc_v, kl, l2, gn, _= evald_ops_this_batch
+                evald_ops_this_batch = (tc, rc, rc_v, kl, l2, gn)
             evald_ops.append(evald_ops_this_batch)
         evald_ops = np.mean(evald_ops, axis=0)
         return evald_ops
@@ -1034,6 +1061,8 @@ class LFADS(object):
 
     def train_model(self, datasets, target_num_epochs=None):
     # this is the main loop for training a model
+        session = tf.get_default_session()
+
         hps = self.hps
 
         # check to see if there are any validation datasets
@@ -1043,7 +1072,7 @@ class LFADS(object):
             has_any_valid_set = True
             break
 
-        session = tf.get_default_session()
+
 
         # monitor the learning rate
         lr = self.get_learning_rate()
@@ -1067,7 +1096,7 @@ class LFADS(object):
 
         kl_weight, l2_weight = self.get_kl_l2_weights(session)
         # print validation costs before the first training step
-        val_total_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, val_kl_cost, val_l2_cost = \
+        val_total_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, val_kl_cost, val_l2_cost ,_= \
             self.do_validation(datasets,
                              kl_ic_weight=hps['kl_ic_weight'],
                              kl_co_weight=hps['kl_co_weight'],
@@ -1120,13 +1149,13 @@ class LFADS(object):
 
             # CP/MRK: we no longer use these step-specific outputs
             #tr_total_cost, train_set_heldin_samp_cost, train_set_heldout_samp_cost, tr_kl_cost = \
-            self.train_epoch(datasets, do_save_ckpt=do_save_ckpt,
+            trout = self.train_epoch(datasets, do_save_ckpt=do_save_ckpt,
                                  kl_ic_weight = hps['kl_ic_weight'],
                                  kl_co_weight = hps['kl_co_weight'],
                                  kl_weight=kl_weight,
                                  l2_weight=l2_weight)
             
-            tr_total_cost, train_set_heldin_samp_cost, train_set_heldout_samp_cost, tr_kl_cost, l2_cost = \
+            tr_total_cost, train_set_heldin_samp_cost, train_set_heldout_samp_cost, tr_kl_cost, l2_cost,_ = \
                 self.do_validation(datasets,
                                  kl_ic_weight = hps['kl_ic_weight'],
                                  kl_co_weight = hps['kl_co_weight'],
@@ -1134,7 +1163,7 @@ class LFADS(object):
                                  kl_weight=kl_weight,
                                  l2_weight=l2_weight)
 
-            val_total_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, val_kl_cost, _  = \
+            val_total_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, val_kl_cost, _ ,_ = \
                 self.do_validation(datasets,
                                  kl_ic_weight = hps['kl_ic_weight'],
                                  kl_co_weight = hps['kl_co_weight'],
@@ -1277,6 +1306,12 @@ class LFADS(object):
                 with open(csv_file, "a") as myfile:
                     myfile.write(csv_outstr)
 
+
+            norms = trout[5]
+            print(norms.shape)
+            csv_file = os.path.join(self.hps.lfads_save_dir, 'gradnorms.csv')
+            with open(csv_file, "a") as myfile:
+                myfile.write('{}\n'.format(norms))
             #plotind = random.randint(0, hps['batch_size']-1)
             #ops_to_eval = [self.output_dist_params]
             #output = session.run(ops_to_eval, feed_dict)
@@ -1291,7 +1326,9 @@ class LFADS(object):
             # MRK, change the LR decay based on valid cost (previously was based on train cost)
             #valid_cost_to_use = val_total_cost
             # use training cost for learning rate annealing
+            #valid_cost_to_use = tr_total_cost
             valid_cost_to_use = val_total_cost
+
             #if n_lr > 0 and len(valid_costs) > n_lr and (valid_cost_to_use > max(valid_costs[-n_lr:])):
             #    self.printlog("Decreasing learning rate")
             #    self.run_learning_rate_decay_opt()

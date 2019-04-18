@@ -55,12 +55,13 @@ def init_linear_transform(in_size, out_size, name=None, collections=None, mat_in
 
     # initialze with a random distribuion
     if mat_init_value is None:
-        stddev = 1 / np.sqrt(float(in_size))
+        stddev = 1.0 / np.sqrt(float(in_size))
         mat_init = tf.random_normal_initializer(0.0, stddev, dtype=tf.float32)
+        #mat_init = tf.contrib.layers.xavier_initializer()
         vshape = [in_size, out_size]
     else:
-        mat_init = mat_init_value
-        vshape = None
+        mat_init = tf.constant_initializer(mat_init_value)
+        vshape = [in_size, out_size]
 
     # weight matrix
     w_collections = [tf.GraphKeys.GLOBAL_VARIABLES, "norm-variables"]
@@ -80,7 +81,7 @@ def init_linear_transform(in_size, out_size, name=None, collections=None, mat_in
             b_init = tf.zeros_initializer()
             vshape = [1, out_size]
         else:
-            b_init = bias_init_value
+            b_init = tf.constant_initializer(bias_init_value)
             vshape = None
         b = tf.get_variable(bname, vshape,
                             initializer=b_init,
@@ -92,12 +93,12 @@ def init_linear_transform(in_size, out_size, name=None, collections=None, mat_in
     return (w, b)
 
 
-def linear(x, out_size, name, collections=None, mat_init_value=None, bias_init_value=None):
+def linear(x, out_size, name, collections=None, mat_init_value=None, bias_init_value=None, normalized=False, do_bias=True):
     # generic function (we use linear transforms in a lot of places)
     # initialize the weights of the linear transformation based on the size of the inputs
     in_size = int(x.get_shape()[1])
     W, b = init_linear_transform(in_size, out_size, name=name, collections=collections, mat_init_value=mat_init_value,
-                                 bias_init_value=bias_init_value)
+                                 bias_init_value=bias_init_value, normalized=normalized, do_bias=do_bias)
     return tf.matmul(x, W) + b
 
 
@@ -118,7 +119,7 @@ def ListOfRandomBatches(num_trials, batch_size):
 
 class Gaussian(object):
     """Base class for Gaussian distribution classes."""
-
+    '''
     @property
     def mean(self):
         return self.mean_bxn
@@ -133,7 +134,10 @@ class Gaussian(object):
 
     @property
     def sample(self):
-        return self.mean + tf.exp(0.5 * self.logvar) * self.noise
+        #return self.mean + tf.exp(0.5 * self.logvar) * self.noise
+        return self.sample_bxn
+    '''
+
 
     #def noise(self):
     #    return self.noise_bxn
@@ -190,6 +194,10 @@ class DiagonalGaussianFromExisting(Gaussian):
             #logvar_bxn = tf.nn.relu(logvar_bxn) + tf.log(var_min)
         self.logvar_bxn = logvar_bxn
 
+        self.noise_bxn = noise_bxn = tf.random_normal(tf.shape(logvar_bxn))
+        #self.noise_bxn.set_shape([None, z_size])
+        self.sample_bxn = mean_bxn + tf.exp(0.5 * logvar_bxn) * noise_bxn
+
     def logp(self, z=None):
         """Compute the log-likelihood under the distribution.
 
@@ -204,10 +212,22 @@ class DiagonalGaussianFromExisting(Gaussian):
 
         # This is needed to make sure that the gradients are simple.
         # The value of the function shouldn't change.
-        if z == self.sample:
-          return gaussian_pos_log_likelihood(self.mean, self.logvar, self.noise)
+        if z == self.sample_bxn:
+          return gaussian_pos_log_likelihood(self.mean_bxn, self.logvar_bxn, self.noise_bxn)
 
-        return diag_gaussian_log_likelihood(z, self.mean, self.logvar)
+        return diag_gaussian_log_likelihood(z, self.mean_bxn, self.logvar_bxn)
+
+    @property
+    def mean(self):
+        return self.mean_bxn
+
+    @property
+    def logvar(self):
+        return self.logvar_bxn
+
+    @property
+    def sample(self):
+        return self.sample_bxn
 
 class LearnableDiagonalGaussian(Gaussian):
     """Diagonal Gaussian with different constant mean and variances in each
@@ -238,6 +258,17 @@ class LearnableDiagonalGaussian(Gaussian):
 
         self.noise_bxn = tf.random_normal(tf.shape(self.logvar_bxn))
 
+    @property
+    def mean(self):
+        return self.mean_bxn
+
+    @property
+    def logvar(self):
+        return self.logvar_bxn
+
+    @property
+    def sample(self):
+        return self.sample_bxn
     # Not USED
     # def logp(self, z=None):
     #     """Compute the log-likelihood under the distribution.
@@ -355,10 +386,11 @@ class LearnableAutoRegressive1Prior(object):
 
 
 def makeInitialState(state_dim, batch_size, name):
-    init_stddev = 1 / np.sqrt(float(state_dim))
-    init_initter = tf.random_normal_initializer(0.0, init_stddev, dtype=tf.float32)
+    #init_stddev = 1 / np.sqrt(float(state_dim))
+    #init_initter = tf.random_normal_initializer(0.0, init_stddev, dtype=tf.float32)
     init_state = tf.get_variable(name + '_init_state', [1, state_dim],
-                                 initializer=init_initter,
+                                 #initializer=init_initter,
+                                 initializer=tf.zeros_initializer(),
                                  dtype=tf.float32, trainable=True)
     tile_dimensions = [batch_size, 1]
     init_state_tiled = tf.tile(init_state,
@@ -367,7 +399,7 @@ def makeInitialState(state_dim, batch_size, name):
     return init_state_tiled
 
 
-class LinearTimeVarying_NEW(object):
+class LinearTimeVarying(object):
     # self.output = linear transform
     # self.output_nl = nonlinear transform
 
@@ -412,7 +444,7 @@ class LinearTimeVarying_NEW(object):
         #print('NEW TIMEVARYING USED')
         self.output = output
 
-class LinearTimeVarying(object):
+class LinearTimeVarying_OLD(object):
     # self.output = linear transform
     # self.output_nl = nonlinear transform
 
@@ -526,7 +558,8 @@ class KLCost_GaussianGaussian(object):
             - 1.0, [1])
 
         self.kl_cost_b = tf.reduce_sum(kl_b, [1]) if len(kl_b.get_shape()) == 2 else kl_b
-        self.kl_cost = tf.reduce_mean(kl_b)
+
+        #self.kl_cost = tf.reduce_mean(kl_b)
 
 # NOT USED
 class KLCost_GaussianGaussianProcessSampled(object):
@@ -661,3 +694,33 @@ def dropout(x, keep_prob, noise_shape=None, seed=None, name=None,
         # if context.in_graph_mode():
         ret.set_shape(x.get_shape())
         return ret, binary_tensor
+
+class Poisson(object):
+    """Poisson distributon
+
+    Computes the log probability under the model.
+
+    """
+
+    def __init__(self, log_rates):
+        """ Create Poisson distributions with log_rates parameters.
+
+        Args:
+          log_rates: a tensor-like list of log rates underlying the Poisson dist.
+        """
+        self.logr = log_rates
+
+    def logp(self, bin_counts):
+        """Compute the log probability for the counts in the bin, under the model.
+
+        Args:
+          bin_counts: array-like integer counts
+
+        Returns:
+          The log-probability under the Poisson models for each element of
+          bin_counts.
+        """
+        k = tf.to_float(bin_counts)
+        # log poisson(k, r) = log(r^k * e^(-r) / k!) = k log(r) - r - log k!
+        # log poisson(k, r=exp(x)) = k * x - exp(x) - lgamma(k + 1)
+        return k * self.logr - tf.exp(self.logr) - tf.lgamma(k + 1)

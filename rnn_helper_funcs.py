@@ -15,9 +15,10 @@ class BidirectionalDynamicRNN(object):
 
         if initial_state is None:
             # need initial states for fw and bw
-            self.init_stddev = 1 / np.sqrt(float(state_dim))
-            self.init_initter = tf.random_normal_initializer(0.0, self.init_stddev, dtype=tf.float32)
+            #self.init_stddev = 1 / np.sqrt(float(state_dim))
+            #self.init_initter = tf.random_normal_initializer(0.0, self.init_stddev, dtype=tf.float32)
 
+            self.init_initter = tf.zeros_initializer()
             self.init_h_fw = tf.get_variable(name + '_init_h_fw', [1, state_dim],
                                              initializer=self.init_initter,
                                              dtype=tf.float32)
@@ -68,7 +69,8 @@ class BidirectionalDynamicRNN(object):
             self.cell = tf.nn.rnn_cell.LSTMCell(num_units=state_dim,
                                                 state_is_tuple=True)
         elif rnn_type.lower() == 'gru':
-            self.cell = tf.nn.rnn_cell.GRUCell(num_units=state_dim)
+            #self.cell = tf.nn.rnn_cell.GRUCell(num_units=state_dim)
+            self.cell = tf.contrib.cudnn_rnn.CudnnGRU(num_layers=1, num_units=state_dim)
             #self.cell = tf.contrib.cudnn_rnn.CudnnCompatibleGRUCell(num_units=state_dim)
         elif rnn_type.lower() == 'customgru':
             self.cell = GRUCell(num_units = state_dim,
