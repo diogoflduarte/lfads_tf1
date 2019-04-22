@@ -41,8 +41,7 @@ class GRUCell(LayerRNNCell):
                  name=None,
                  dtype=tf.float32,
                  recurrent_collections=None,
-                 clip_value=np.inf,
-                 forget_bias=1.0):
+                 clip_value=np.inf,):
         super(GRUCell, self).__init__(_reuse=reuse, name=name, dtype=dtype)
 
         # Inputs must be 2-dimensional.
@@ -51,10 +50,9 @@ class GRUCell(LayerRNNCell):
         self._num_units = num_units
         self._activation = activation or math_ops.tanh
         self._kernel_initializer = kernel_initializer
-        self._bias_initializer = bias_initializer #if not forget_bias else tf.zeros_initializer()
+        self._bias_initializer = bias_initializer
         self._rec_collections = recurrent_collections
         self._clip_value = clip_value
-        self._forget_bias = forget_bias
 
     @property
     def state_size(self):
@@ -199,7 +197,7 @@ class ComplexCell(LayerRNNCell):
 
         self._activation = activation or math_ops.tanh
         self._kernel_initializer = kernel_initializer
-        self._bias_initializer = bias_initializer #if not forget_bias else tf.zeros_initializer()
+        self._bias_initializer = bias_initializer
         self._gate_kernel_input = {}
         self._gate_kernel_rec = {}
         self._candidate_kernel_input = {}
