@@ -100,6 +100,9 @@ ADAM_EPSILON = 1e-8
 ADAM_BETA1 = 0.9
 ADAM_BETA2 = 0.999
 
+# calculate R^2 if the truth rates are available
+DO_CALC_R2 = False
+
 flags = tf.app.flags
 flags.DEFINE_string("kind", "train",
                     "Type of model to build {train, \
@@ -377,6 +380,9 @@ flags.DEFINE_float("adam_beta1", ADAM_BETA1,
 flags.DEFINE_float("adam_beta2", ADAM_BETA2,
                    "Beta2 parameter of ADAM optimizer.")
 
+flags.DEFINE_boolean("do_calc_r2", True,
+                     "Calculate R^2 is the truth rates are available.")
+
 
 FLAGS = flags.FLAGS
 
@@ -569,6 +575,8 @@ def build_hyperparameter_dict(flags):
   d['adam_epsilon'] = flags.adam_epsilon
   d['beta1'] = flags.adam_beta1
   d['beta2'] = flags.adam_beta2
+
+  d['do_calc_r2'] = flags.do_calc_r2
   
   return d
 

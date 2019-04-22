@@ -74,10 +74,9 @@ class GRUCell(LayerRNNCell):
         dim = input_depth + self._num_units
         #input_initializer = tf.initializers.random_normal(stddev=1.0/np.sqrt(input_depth))
         #rec_initializer = tf.initializers.random_normal(stddev=1.0/np.sqrt(self._num_units))
-        rec_initializer = input_initializer = None
-        tf.contrib.layers.xavier_initializer()
-        #input_initializer = tf.initializers.random_normal(stddev=1.0/np.sqrt(dim))
-        #rec_initializer = tf.initializers.random_normal(stddev=1.0/np.sqrt(dim))
+        #rec_initializer = input_initializer = None
+        input_initializer = tf.initializers.random_normal(stddev=1.0/np.sqrt(dim))
+        rec_initializer = tf.initializers.random_normal(stddev=1.0/np.sqrt(dim))
 
         self.build_custom(input_depth, input_initializer, rec_initializer, bias_initializer=self._bias_initializer)
         self.built = True
@@ -192,9 +191,7 @@ class ComplexCell(LayerRNNCell):
                  kernel_initializer=None,
                  bias_initializer=None,
                  name=None,
-                 dtype=tf.float32,
-                 forget_bias=1.0,
-                 is_training=False):
+                 dtype=tf.float32):
         super(ComplexCell, self).__init__(_reuse=reuse, name=name, dtype=dtype)
 
         # Inputs must be 2-dimensional.
@@ -219,8 +216,6 @@ class ComplexCell(LayerRNNCell):
         self._ext_input_dim = ext_input_dim
         self._keep_prob = keep_prob
         self._clip_value = clip_value
-        self._forget_bias = forget_bias
-        self._is_training = is_training
 
 
     @property
@@ -235,10 +230,8 @@ class ComplexCell(LayerRNNCell):
         # create GRU weight/bias tensors for generator and controller
         gen_input_depth = self._co_dim + self._ext_input_dim
         # initializing input and recurrent weights separately
-        #input_initializer = tf.initializers.random_normal(stddev=1.0/np.sqrt(gen_input_depth))
-        #rec_initializer = tf.initializers.random_normal(stddev=1.0/np.sqrt(self._num_units_gen))
-        input_initializer = tf.contrib.layers.xavier_initializer()
-        rec_initializer = tf.contrib.layers.xavier_initializer()
+        input_initializer = tf.initializers.random_normal(stddev=1.0/np.sqrt(gen_input_depth))
+        rec_initializer = tf.initializers.random_normal(stddev=1.0/np.sqrt(self._num_units_gen))
         self.build_custom(gen_input_depth,
                           cell_name='gen_gru', num_units=self._num_units_gen, rec_collections_name='l2_gen',
                           input_initializer=input_initializer, rec_initializer=rec_initializer)
@@ -348,7 +341,6 @@ class ComplexCell(LayerRNNCell):
                              self._factors_dim], axis=1)
 
         with tf.variable_scope("gen_2_fac"):
-            #gen_s_new1 = tf.layers.batch_normalization(gen_s_new, training=self._is_training)
             # add dropout to gen output (MRK fix)
             gen_s_new_dropped = tf.nn.dropout(gen_s, self._keep_prob)
             # MRK, make do_bias=False, and normalized the factors
@@ -409,7 +401,6 @@ class ComplexCell(LayerRNNCell):
         gen_s_new = self.gru_block(gen_inputs, gen_s, cell_name='gen_gru')
         # calculate the factors
         with tf.variable_scope("gen_2_fac", reuse=True):
-            #gen_s_new1 = tf.layers.batch_normalization(gen_s_new, training=self._is_training)
             # add dropout to gen output (MRK fix)
             gen_s_new_dropped = tf.nn.dropout(gen_s_new, self._keep_prob)
             # MRK, make do_bias=False, and normalized the factors
@@ -425,7 +416,7 @@ class ComplexCell(LayerRNNCell):
 
         return new_h, new_h
 
-
+'''
 def complex_rnn(hps,
                  data_size,
                  gen_ics,
@@ -546,5 +537,5 @@ def complex_rnn(hps,
         # pass the states and make other values accessible outside DynamicRNN
         # state_concat = [gen_s_new, con_s_new, co_mean, co_logvar, co_out, fac_s_new]
         # new_h = tf.concat(state_concat, axis=1)
-
+'''
 

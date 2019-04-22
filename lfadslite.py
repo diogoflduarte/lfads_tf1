@@ -16,14 +16,14 @@ from helper_funcs import linear, init_linear_transform, makeInitialState
 from helper_funcs import ListOfRandomBatches, kind_dict, kind_dict_key
 from helper_funcs import LearnableAutoRegressive1Prior
 from helper_funcs import DiagonalGaussianFromExisting, LearnableDiagonalGaussian, diag_gaussian_log_likelihood
-from helper_funcs import LinearTimeVarying, Poisson
+from helper_funcs import LinearTimeVarying
 from helper_funcs import KLCost_GaussianGaussian, KLCost_GaussianGaussianProcessSampled
 from data_funcs import write_data
 from helper_funcs import printer, mkdir_p
 #from plot_funcs import plot_data, close_all_plots
 #from data_funcs import read_datasets
-from customcells import ComplexCell, complex_rnn
-from rnn_helper_funcs import BidirectionalDynamicRNN, DynamicRNN
+from customcells import ComplexCell
+from rnn_helper_funcs import BidirectionalDynamicRNN #, DynamicRNN
 from helper_funcs import dropout
 
 
@@ -71,8 +71,8 @@ class LFADS(object):
     def __init__(self, hps, datasets = None):
 
         #CELL_TYPE = 'lstm'
-        CELL_TYPE = 'gru'
-        #CELL_TYPE = 'customgru'
+        #CELL_TYPE = 'gru'
+        CELL_TYPE = 'customgru'
 
         # to stop certain gradients paths through the graph in backprop
         def entry_stop_gradients(target, mask):
@@ -109,7 +109,6 @@ class LFADS(object):
             self.cv_rand_mask = tf.placeholder(tf.float32, shape=[None, hps['num_steps'], None], name='cv_rand_mask')
             # dropout keep probability
             #   enumerated in helper_funcs.kind_dict
-            self.is_training = tf.placeholder(tf.bool, name='is_training')
             self.keep_prob = tf.placeholder(tf.float32, name='keep_prob')
             self.keep_ratio = tf.placeholder(tf.float32, name='keep_ratio')
 
@@ -332,8 +331,6 @@ class LFADS(object):
             #ic_enc_laststate_dropped = self.ic_enc_rnn_obj.last_tot
             ic_enc_laststate_dropped = tf.nn.dropout(self.ic_enc_rnn_obj.last_tot, self.keep_prob)
 
-            #ic_enc_laststate_dropped = tf.layers.batch_normalization(ic_enc_laststate_dropped, training=self.is_training)
-
             ics_mean = linear(ic_enc_laststate_dropped, hps.ic_dim, name='ic_enc_2_ics_mean')
             ics_logvar = linear(ic_enc_laststate_dropped, hps.ic_dim, name='ic_enc_2_ics_var')
 
@@ -372,7 +369,9 @@ class LFADS(object):
         ### CONTROLLER construction
         # this should only be done if a controller is requested
         # if not, skip all these graph elements like so:
-        if False: # hps['co_dim'] == 0:
+        # co_dim==0 is handled in the ComplexCell
+        """
+        if hps['co_dim'] == 0:
             with tf.variable_scope('generator'):
                 #gen_cell = CustomGRUCell(num_units = hps['gen_dim'],
                 #                         batch_size = graph_batch_size,
@@ -410,8 +409,7 @@ class LFADS(object):
                                                  do_bias = False,
                                                  normalized=True)
                 self.factors = self.fac_obj.output
-        else:
-            pass
+        """
 
         assert hps.co_dim >= 0, 'co_dim must be equal or greater than 0 !'
 
@@ -442,7 +440,7 @@ class LFADS(object):
                         ci_enc_rev_states = tf.concat([ ci_enc_rev_states[:,toffset:,:],
                                                         tf.zeros_like(ci_enc_rev_states[:, -toffset:, :])],
                                                         axis=1)
-                    self.ci_enc_rnn_states = [ci_enc_fwd_states, ci_enc_rev_states]
+                    self.ci_enc_rnn_states = tf.concat([ci_enc_fwd_states, ci_enc_rev_states], axis=2)
                 else:
                     # if causal controller, only use the fwd rnn
                     [ci_enc_fwd_states, _]  = self.ci_enc_rnn_obj.states
@@ -463,7 +461,6 @@ class LFADS(object):
             self.ci_enc_outputs = tf.zeros([graph_batch_size, seq_len, 0])
             used_con_dim = 0
 
-        # self.ci_enc_outputs = tf.layers.batch_normalization(self.ci_enc_outputs, training=self.is_training)
         # this is used for co_dim == 0 and co_dim > 0
         ## the controller, controller outputs, generator, and factors are implemented
         #     in one RNN whose individual cell is "complex"
@@ -513,7 +510,6 @@ class LFADS(object):
                                          run_type = self.run_type,
                                          keep_prob=self.keep_prob,
                                          clip_value=hps['cell_clip_value'],
-                                         is_training=self.is_training
                                          )
 
             # construct the actual RNN
@@ -612,7 +608,7 @@ class LFADS(object):
                 self.co_logvar_states)
 
             use_ar_prior = True
-            # choose to use the AR implementation or diag gaussian implementation
+            # choose to use the AR implementation or diagonal gaussian implementation
             if use_ar_prior:
                 # MRK, fix, implement Auto Regressive prior
                 autocorrelation_taus = [hps.prior_ar_atau for _ in range(hps.co_dim)]
@@ -687,9 +683,9 @@ class LFADS(object):
         #self.rec_cost_train = -self.log_p_train
         #ones_ratio = tf.reduce_mean(self.cv_binary_mask_batch)
 
-        #self.rec_cost_train = - (1. / self.cv_keep_ratio) * \
-        #                      tf.reduce_sum(self.loglikelihood_b_t * self.cv_binary_mask_batch) / tf.cast(graph_batch_size, tf.float32)
-        self.rec_cost_train = -tf.reduce_sum(tf.reduce_mean(self.loglikelihood_b_t, axis=0))
+        self.rec_cost_train = - (1. / self.cv_keep_ratio) * \
+                              tf.reduce_sum(self.loglikelihood_b_t * self.cv_binary_mask_batch) / tf.cast(graph_batch_size, tf.float32)
+        #self.rec_cost_train = -tf.reduce_sum(tf.reduce_mean(self.loglikelihood_b_t, axis=0))
         #self.rec_cost_train = - tf.reduce_sum(self.loglikelihood_b_t * self.cv_binary_mask_batch) / graph_batch_size
         #self.rec_cost_train /= ones_ratio
 
@@ -707,7 +703,6 @@ class LFADS(object):
             self.rec_cost_valid = tf.constant(np.nan)
         #self.rec_cost_valid = - tf.reduce_sum(self.loglikelihood_b_t * (1. - self.cv_binary_mask_batch)) / graph_batch_size
         #self.rec_cost_valid /= (1. - ones_ratio)
-
 
 
         # calculate L2 costs for each network
@@ -812,7 +807,7 @@ class LFADS(object):
     ## functions to interface with the outside world
     def build_feed_dict(self, train_name, data_bxtxd, cv_rand_mask=None, ext_input_bxtxi=None, run_type=None,
                         keep_prob=None, kl_ic_weight=1.0, kl_co_weight=1.0,
-                        keep_ratio=None, kl_weight=1.0, l2_weight=1.0, is_training=False):
+                        keep_ratio=None, kl_weight=1.0, l2_weight=1.0):
       """Build the feed dictionary, handles cases where there is no value defined.
 
       Args:
@@ -843,7 +838,6 @@ class LFADS(object):
       feed_dict[self.kl_co_weight] = kl_co_weight
       feed_dict[self.kl_weight] = kl_weight
       feed_dict[self.l2_weight] = l2_weight
-      feed_dict[self.is_training] = is_training
 
 
       if self.ext_input is not None and ext_input_bxtxi is not None:
@@ -971,11 +965,9 @@ class LFADS(object):
             ops_to_eval.append(self.train_op)
             keep_prob = self.hps.keep_prob
             keep_ratio = self.hps.keep_ratio
-            is_training = True
         else:
             keep_prob = 1.0
             keep_ratio = 1.0
-            is_training = False
             
         session = tf.get_default_session()
 
@@ -1002,8 +994,7 @@ class LFADS(object):
                                              kl_co_weight = kl_co_weight,
                                              keep_ratio=keep_ratio,
                                              kl_weight=kl_weight,
-                                             l2_weight=l2_weight,
-                                             is_training=is_training)
+                                             l2_weight=l2_weight,)
             evald_ops_this_batch = session.run(ops_to_eval, feed_dict = feed_dict)
             # for training runs, there is an extra output argument. kill it
             if len(evald_ops_this_batch) > 6:
@@ -1121,7 +1112,7 @@ class LFADS(object):
         coef = 1.0 # smoothing coefficient - lower values mean more smoothing
 
         # calculate R^2 if true data is available
-        do_r2_calc = data_dict['train_truth'] is not None
+        do_r2_calc = data_dict['train_truth'] is not None and hps['do_calc_r2']
 
         while True:
             new_lr = self.get_learning_rate()

@@ -69,8 +69,7 @@ class BidirectionalDynamicRNN(object):
             self.cell = tf.nn.rnn_cell.LSTMCell(num_units=state_dim,
                                                 state_is_tuple=True)
         elif rnn_type.lower() == 'gru':
-            #self.cell = tf.nn.rnn_cell.GRUCell(num_units=state_dim)
-            self.cell = tf.contrib.cudnn_rnn.CudnnGRU(num_layers=1, num_units=state_dim)
+            self.cell = tf.nn.rnn_cell.GRUCell(num_units=state_dim)
             #self.cell = tf.contrib.cudnn_rnn.CudnnCompatibleGRUCell(num_units=state_dim)
         elif rnn_type.lower() == 'customgru':
             self.cell = GRUCell(num_units = state_dim,
@@ -112,6 +111,7 @@ class BidirectionalDynamicRNN(object):
         else:
             self.last_tot = tf.concat(axis=1, values=[self.last_fw, self.last_bw])
 
+''' # Not used:
 
 class DynamicRNN(object):
     def __init__(self, state_dim, batch_size, name, sequence_lengths,
@@ -186,5 +186,5 @@ class DynamicRNN(object):
             inputs=inputs,
             initial_state=self.init,
         )
-
+'''
 

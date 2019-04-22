@@ -119,7 +119,6 @@ def ListOfRandomBatches(num_trials, batch_size):
 
 class Gaussian(object):
     """Base class for Gaussian distribution classes."""
-    '''
     @property
     def mean(self):
         return self.mean_bxn
@@ -136,7 +135,7 @@ class Gaussian(object):
     def sample(self):
         #return self.mean + tf.exp(0.5 * self.logvar) * self.noise
         return self.sample_bxn
-    '''
+
 
 
     #def noise(self):
@@ -217,17 +216,18 @@ class DiagonalGaussianFromExisting(Gaussian):
 
         return diag_gaussian_log_likelihood(z, self.mean_bxn, self.logvar_bxn)
 
-    @property
-    def mean(self):
-        return self.mean_bxn
+    # @property
+    # def mean(self):
+    #     return self.mean_bxn
+    #
+    # @property
+    # def logvar(self):
+    #     return self.logvar_bxn
+    #
+    # @property
+    # def sample(self):
+    #     return self.sample_bxn
 
-    @property
-    def logvar(self):
-        return self.logvar_bxn
-
-    @property
-    def sample(self):
-        return self.sample_bxn
 
 class LearnableDiagonalGaussian(Gaussian):
     """Diagonal Gaussian with different constant mean and variances in each
@@ -258,17 +258,17 @@ class LearnableDiagonalGaussian(Gaussian):
 
         self.noise_bxn = tf.random_normal(tf.shape(self.logvar_bxn))
 
-    @property
-    def mean(self):
-        return self.mean_bxn
-
-    @property
-    def logvar(self):
-        return self.logvar_bxn
-
-    @property
-    def sample(self):
-        return self.sample_bxn
+    # @property
+    # def mean(self):
+    #     return self.mean_bxn
+    #
+    # @property
+    # def logvar(self):
+    #     return self.logvar_bxn
+    #
+    # @property
+    # def sample(self):
+    #     return self.sample_bxn
     # Not USED
     # def logp(self, z=None):
     #     """Compute the log-likelihood under the distribution.
@@ -290,7 +290,7 @@ class LearnableDiagonalGaussian(Gaussian):
     #     return diag_gaussian_log_likelihood(z, self.mean, self.logvar)
 
 
-# NOT USED
+# Used for AR prior
 class LearnableAutoRegressive1Prior(object):
   """AR(1) model where autocorrelation and process variance are learned
   parameters.  Assumed zero mean.
@@ -561,7 +561,7 @@ class KLCost_GaussianGaussian(object):
 
         #self.kl_cost = tf.reduce_mean(kl_b)
 
-# NOT USED
+# Used for AR prior
 class KLCost_GaussianGaussianProcessSampled(object):
   """ log p(x|z) + KL(q||p) terms for Gaussian posterior and Gaussian process
   prior via sampling.
@@ -694,33 +694,3 @@ def dropout(x, keep_prob, noise_shape=None, seed=None, name=None,
         # if context.in_graph_mode():
         ret.set_shape(x.get_shape())
         return ret, binary_tensor
-
-class Poisson(object):
-    """Poisson distributon
-
-    Computes the log probability under the model.
-
-    """
-
-    def __init__(self, log_rates):
-        """ Create Poisson distributions with log_rates parameters.
-
-        Args:
-          log_rates: a tensor-like list of log rates underlying the Poisson dist.
-        """
-        self.logr = log_rates
-
-    def logp(self, bin_counts):
-        """Compute the log probability for the counts in the bin, under the model.
-
-        Args:
-          bin_counts: array-like integer counts
-
-        Returns:
-          The log-probability under the Poisson models for each element of
-          bin_counts.
-        """
-        k = tf.to_float(bin_counts)
-        # log poisson(k, r) = log(r^k * e^(-r) / k!) = k log(r) - r - log k!
-        # log poisson(k, r=exp(x)) = k * x - exp(x) - lgamma(k + 1)
-        return k * self.logr - tf.exp(self.logr) - tf.lgamma(k + 1)
