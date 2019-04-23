@@ -130,10 +130,6 @@ class GRUCell(LayerRNNCell):
 
         gate_inputs = nn_ops.bias_add(gate_inputs, self._gate_bias)
 
-        # MRKT add forget bias
-        #r, u = array_ops.split(value=gate_inputs, num_or_size_splits=2, axis=1)
-        #r, u = math_ops.sigmoid(r), math_ops.sigmoid(u + self._forget_bias)
-
         value = math_ops.sigmoid(gate_inputs)
         r, u = array_ops.split(value=value, num_or_size_splits=2, axis=1)
 
@@ -228,7 +224,7 @@ class ComplexCell(LayerRNNCell):
         # create GRU weight/bias tensors for generator and controller
         gen_input_depth = self._co_dim + self._ext_input_dim
         # initializing input and recurrent weights separately
-        input_initializer = tf.initializers.random_normal(stddev=1.0/np.sqrt(gen_input_depth))
+        input_initializer = tf.initializers.random_normal(stddev=1.0/np.sqrt(gen_input_depth)) if gen_input_depth > 0 else None
         rec_initializer = tf.initializers.random_normal(stddev=1.0/np.sqrt(self._num_units_gen))
         self.build_custom(gen_input_depth,
                           cell_name='gen_gru', num_units=self._num_units_gen, rec_collections_name='l2_gen',
@@ -298,11 +294,6 @@ class ComplexCell(LayerRNNCell):
 
         gate_inputs = nn_ops.bias_add(gate_inputs, self._gate_bias[cell_name])
 
-        # MRKT add forget bias
-        #r, u = array_ops.split(value=gate_inputs, num_or_size_splits=2, axis=1)
-        #r, u = math_ops.sigmoid(r), math_ops.sigmoid(u + 1.0)
-        #r, u = array_ops.split(value=gate_inputs, num_or_size_splits=2, axis=1)
-        #r, u = math_ops.sigmoid(r), math_ops.sigmoid(u + self._forget_bias)
         value = math_ops.sigmoid(gate_inputs)
         r, u = array_ops.split(value=value, num_or_size_splits=2, axis=1)
 
@@ -349,8 +340,6 @@ class ComplexCell(LayerRNNCell):
                                # collections=self.col_names['fac']
                                )
         # input to the controller is (enc_con output and factors)
-        # MRKT
-        # con_i = tf.zeros_like(con_i)
         if self._co_dim > 0:
             # if controller is used
             con_inputs = tf.concat([con_i, fac_s], axis=1, )
@@ -374,17 +363,11 @@ class ComplexCell(LayerRNNCell):
                                                     tf.equal(self._run_type,
                                                              tf.constant(kind_dict("posterior_sample_and_average"))))
                 co_out = tf.cond(do_posterior_sample, lambda: cos_posterior.sample, lambda: cos_posterior.mean)
-                # MRKT
-                #co_out = cos_posterior.sample
-                #co_out = cos_posterior.mean
-                #co_out = co_mean
         else:
             # pass zeros (0-dim) as inputs to generator
             co_out = tf.zeros([tf.shape(gen_s)[0], 0])
             con_s_new = co_mean = co_logvar = tf.zeros([tf.shape(gen_s)[0], 0])
 
-
-        #co_out *= tf.sqrt(tf.cast(tf.shape(co_out)[1], tf.float32))
         # generator's inputs
         if self._ext_input_dim > 0 and self._inject_ext_input_to_gen:
             # passing external inputs along with controller output as generator's input
@@ -394,7 +377,6 @@ class ComplexCell(LayerRNNCell):
         else:
             # using only controller output as generator's input
             gen_inputs = co_out
-        #gen_inputs = tf.zeros_like(gen_inputs)
         # generator GRU recursion, get the new state
         gen_s_new = self.gru_block(gen_inputs, gen_s, cell_name='gen_gru')
         # calculate the factors

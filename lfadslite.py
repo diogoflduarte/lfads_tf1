@@ -1,17 +1,15 @@
+from __future__ import absolute_import
+from __future__ import division
 from __future__ import print_function
 import tensorflow as tf
-#import tensorflow_probability as tfp
-#import tfp.distributions as tfd
 import numpy as np
-import sys
 import time
 import os
 import re
-import random
 #import matplotlib.pyplot as plt
 
 
-# utils defined by CP
+# utils defined by CP/MRK
 from helper_funcs import linear, init_linear_transform, makeInitialState
 from helper_funcs import ListOfRandomBatches, kind_dict, kind_dict_key
 from helper_funcs import LearnableAutoRegressive1Prior
@@ -69,8 +67,8 @@ class Logger(object):
 class LFADS(object):
 
     def __init__(self, hps, datasets = None):
-
-        #CELL_TYPE = 'lstm'
+        # Cell type only for encoders:
+        #CELL_TYPE = 'lstm' # not working
         #CELL_TYPE = 'gru'
         CELL_TYPE = 'customgru'
 
@@ -272,24 +270,25 @@ class LFADS(object):
         # coordinated dropout
         if hps['keep_ratio'] != 1.0:
             # coordinated dropout enabled on inputs
+            # the dropped out samples would be zero in coor_drop_binary_mask
             masked_dataset_ph, coor_drop_binary_mask = dropout(dataset_ph_dropped, self.keep_ratio)
         else:
             # no coordinated dropout
             masked_dataset_ph = dataset_ph_dropped
 
         # replicate the cross-validation binary mask for this dataset for all elements of the batch
-        # work around error in dynamic rnn when input dim is None
-
+        # workaround for the error in dynamic rnn when input dim is None
         self.cv_binary_mask_batch = self.cv_rand_mask * tf.expand_dims(tf.ones([graph_batch_size, 1]), 1) * \
                                     this_dataset_dims
 
         # apply cross-validation dropout
         # change the cv dropout to randomly sample from empirical distribution
-        masked_dataset_ph = masked_dataset_ph * self.cv_binary_mask_batch + (1.-  self.cv_binary_mask_batch) * \
-                            tf.transpose(tf.random.shuffle(tf.transpose(tf.random.shuffle(self.dataset_ph), [1, 0, 2])), [1,0,2])
-        #masked_dataset_ph = tf.div(masked_dataset_ph, self.cv_keep_ratio) * self.cv_binary_mask_batch
+        # masked_dataset_ph = masked_dataset_ph * self.cv_binary_mask_batch + (1. -  self.cv_binary_mask_batch) * \
+        #                    tf.transpose(tf.random.shuffle(tf.transpose(tf.random.shuffle(self.dataset_ph), [1, 0, 2])), [1,0,2])
+        # mask with zeros
+        masked_dataset_ph = tf.div(masked_dataset_ph, self.cv_keep_ratio) * self.cv_binary_mask_batch
 
-        # add noise insteaad of zeroing the held-out samples
+        # add noise instead of zeroing the held-out samples
         #masked_noise = (1. - self.cv_binary_mask_batch) * tf.transpose(
         #    tf.random_shuffle(tf.transpose(tf.random_shuffle(self.dataset_ph), perm=[1,0,2])),
         #    perm=[1,0,2])
@@ -307,12 +306,6 @@ class LFADS(object):
             self.input_to_encoders = input_factors_object.output
             
         with tf.variable_scope('ic_enc'):
-            #ic_enc_cell = CustomGRUCell(num_units = hps['ic_enc_dim'],\
-            #                            batch_size = graph_batch_size,
-            #                            clip_value = hps['cell_clip_value'],
-            #                            recurrent_collections=['l2_ic_enc'])
-            
-            #seq_len.set_shape([1, graph_batch_size])
             ## ic_encoder
             self.ic_enc_rnn_obj = BidirectionalDynamicRNN(
                 state_dim = hps['ic_enc_dim'],
@@ -324,36 +317,22 @@ class LFADS(object):
                 clip_value = hps['cell_clip_value'],
                 recurrent_collections='l2_ic_enc',
                 rnn_type = CELL_TYPE)
-            #    cell = ic_enc_cell
-            #    output_keep_prob = self.keep_prob
 
             # wrap the last state with a dropout layer
-            #ic_enc_laststate_dropped = self.ic_enc_rnn_obj.last_tot
             ic_enc_laststate_dropped = tf.nn.dropout(self.ic_enc_rnn_obj.last_tot, self.keep_prob)
 
             ics_mean = linear(ic_enc_laststate_dropped, hps.ic_dim, name='ic_enc_2_ics_mean')
             ics_logvar = linear(ic_enc_laststate_dropped, hps.ic_dim, name='ic_enc_2_ics_var')
 
-
-
             self.gen_ics_posterior = DiagonalGaussianFromExisting(ics_mean, ics_logvar, var_min=hps['ic_post_var_min'])
 
-            # map the ic_encoder onto the actual ic layer
-            #self.gen_ics_posterior = DiagonalGaussianFromInput(
-            #    x = ic_enc_laststate_dropped,
-            #    z_size = hps['ic_dim'],
-            #    name = 'ic_enc_2_ics',
-            #    var_min = hps['ic_post_var_min'],
-            #)
             self.posterior_zs_g0 = self.gen_ics_posterior
 
-        # to go forward, either sample from the posterior, or take mean
+        # to go forward, either sample from the posterior, or push the mean
         do_posterior_sample = tf.logical_or(tf.equal(self.run_type, tf.constant(kind_dict("train"))),
             tf.equal(self.run_type, tf.constant(kind_dict("posterior_sample_and_average"))))
         self.gen_ics_lowd = tf.cond(do_posterior_sample, lambda:self.gen_ics_posterior.sample,
             lambda:self.gen_ics_posterior.mean)
-        # MRKT
-        # self.gen_ics_lowd = self.gen_ics_posterior.mean
 
 
         with tf.variable_scope('generator'):
@@ -363,12 +342,6 @@ class LFADS(object):
             else:
                 self.gen_ics = linear(self.gen_ics_lowd, hps['gen_dim'], name='ics_2_g0')
 
-        # MRKT
-        # self.gen_ics = tf.zeros_like(self.gen_ics)
-        
-        ### CONTROLLER construction
-        # this should only be done if a controller is requested
-        # if not, skip all these graph elements like so:
         # co_dim==0 is handled in the ComplexCell
         """
         if hps['co_dim'] == 0:
@@ -413,6 +386,10 @@ class LFADS(object):
 
         assert hps.co_dim >= 0, 'co_dim must be equal or greater than 0 !'
 
+        ### CONTROLLER construction
+        # this should only be done if a controller is requested
+        # if not, skip all these graph elements like so:
+        # co_dim==0 is handled in the ComplexCell
         if hps.co_dim > 0:
             print('Controller is used.')
             with tf.variable_scope('ci_enc'):
@@ -430,33 +407,26 @@ class LFADS(object):
                 
                 toffset = hps['controller_input_lag']
 
-                if not hps['do_causal_controller']:
+                # MRK, revised the below code
+                ci_enc_fwd_states, ci_enc_rev_states = self.ci_enc_rnn_obj.states
+                if hps['controller_input_lag'] > 0:
                     # MRK, fix, added the lag for non-causal case
-                    [ci_enc_fwd_states, ci_enc_rev_states] = self.ci_enc_rnn_obj.states
-                    if hps['controller_input_lag'] > 0:
-                        ci_enc_fwd_states = tf.concat([tf.zeros_like(ci_enc_fwd_states[:,0:toffset,:]),
-                                                                ci_enc_fwd_states[:,0:-toffset,:]],
-                                                               axis=1)
-                        ci_enc_rev_states = tf.concat([ ci_enc_rev_states[:,toffset:,:],
-                                                        tf.zeros_like(ci_enc_rev_states[:, -toffset:, :])],
-                                                        axis=1)
-                    self.ci_enc_rnn_states = tf.concat([ci_enc_fwd_states, ci_enc_rev_states], axis=2)
-                else:
-                    # if causal controller, only use the fwd rnn
-                    [ci_enc_fwd_states, _]  = self.ci_enc_rnn_obj.states
+                    ci_enc_fwd_states = tf.concat([tf.zeros_like(ci_enc_fwd_states[:, 0:toffset, :]),
+                                                   ci_enc_fwd_states[:, 0:-toffset, :]],
+                                                  axis=1)
+                    ci_enc_rev_states = tf.concat([ci_enc_rev_states[:, toffset:, :],
+                                                   tf.zeros_like(ci_enc_rev_states[:, -toffset:, :])],
+                                                  axis=1)
 
-                    if hps['controller_input_lag'] > 0:
-                        leading_zeros = tf.zeros_like(ci_enc_fwd_states[:,0:toffset,:])
-                        self.ci_enc_rnn_states = tf.concat([leading_zeros,
-                                                            ci_enc_fwd_states[:,0:-toffset,:]],
-                                                           axis=1)
-                    else:
-                        [self.ci_enc_rnn_states, _]  = self.ci_enc_rnn_obj.states
-                        #self.ci_enc_rnn_states = ci_enc_fwd_states
-                
-                self.ci_enc_outputs = self.ci_enc_rnn_states
-                used_con_dim = hps['con_dim']
+                if hps['do_causal_controller']:
+                    # if causal controller, only use the fwd rnn
+                    self.ci_enc_outputs = ci_enc_fwd_states
+                else:
+                    self.ci_enc_outputs = tf.concat([ci_enc_fwd_states, ci_enc_rev_states], axis=2)
+
+            used_con_dim = hps['con_dim']
         else:
+            # in co_dim == 0 case:
             # dummy inputs to dynamic rnn, not used for anything
             self.ci_enc_outputs = tf.zeros([graph_batch_size, seq_len, 0])
             used_con_dim = 0
@@ -469,7 +439,6 @@ class LFADS(object):
         with tf.variable_scope('complexcell'):
             # the "complexcell" architecture requires an initial state definition
             # have to define states for each of the components, then concatenate them
-            #'''
             con_init_state = makeInitialState(used_con_dim,
                                               graph_batch_size,
                                               'controller')
@@ -532,7 +501,8 @@ class LFADS(object):
             tf.split(self.complex_outputs,
                      self.comcell_state_dims,
                      axis=2)
-            #'''
+            
+            # MRK, this was for testing with for-loop graph construction of complexcell
             #if hps['ext_input_dim']:
             #    complex_cell_inputs = tf.concat(axis=2, values = [self.ci_enc_outputs, self.ext_input])
             #else:
@@ -541,7 +511,7 @@ class LFADS(object):
             #self.gen_states, self.con_states, self.co_mean_states, self.co_logvar_states, self.controller_outputs, self.factors =\
             #complex_rnn(hps,(graph_batch_size, seq_len, ), self.gen_ics, complex_cell_inputs, hps['ext_input_dim'], self.keep_prob, self.run_type)
 
-                # now back to code that runs for all models
+        # now back to code that runs for all models
         with tf.variable_scope('rates'):
             ## "rates" - more properly called "output_distribution"
             if hps.output_dist.lower() == 'poisson':
@@ -589,11 +559,11 @@ class LFADS(object):
             trainable_mean=True,
             trainable_var=False)
         self.prior_zs_g0 = self.gen_ics_prior
-        
-        # g0 KL cost for each trial
+
+        # g0 KL cost for the whole batch
         self.kl_cost_g0_b = KLCost_GaussianGaussian(self.gen_ics_posterior,
                                                     self.gen_ics_prior).kl_cost_b
-        # g0 KL cost for the whole batch
+        # scale it
         self.kl_cost_g0 = self.kl_cost_g0_b * self.kl_ic_weight
 
         self.kl_cost_co = tf.constant(0.0)
@@ -607,8 +577,8 @@ class LFADS(object):
                 self.co_mean_states,
                 self.co_logvar_states)
 
-            use_ar_prior = True
             # choose to use the AR implementation or diagonal gaussian implementation
+            use_ar_prior = True
             if use_ar_prior:
                 # MRK, fix, implement Auto Regressive prior
                 autocorrelation_taus = [hps.prior_ar_atau for _ in range(hps.co_dim)]
@@ -648,7 +618,8 @@ class LFADS(object):
             random_tensor = tf.convert_to_tensor(1. - self.cd_grad_passthru_prob)
             random_tensor += tf.random_uniform(tf.shape(coor_drop_binary_mask),
                                                        dtype=coor_drop_binary_mask.dtype)
-            # pass thru some gradients
+            # pass through some gradients
+            # coor_drop_binary_mask is zeros at the place of dropped samples
             tmp_binary_mask =  coor_drop_binary_mask * tf.floor(random_tensor)
             # exclude cv samples
             grad_binary_mask = self.cv_binary_mask_batch * (1. - tmp_binary_mask)
@@ -657,53 +628,25 @@ class LFADS(object):
 
         # block gradients for coordinated dropout and cross-validation
         if hps.output_dist.lower() == 'poisson':
-            #masked_logrates = entry_stop_gradients(self.logrates, grad_binary_mask)
-            masked_logrates = self.logrates
-            #self.loglikelihood_b_t = Poisson(masked_logrates).logp(self.dataset_ph)
+            # stop the gradient where grad_binary_mask is zero
+            masked_logrates = entry_stop_gradients(self.logrates, grad_binary_mask)
             self.loglikelihood_b_t = -tf.nn.log_poisson_loss( self.dataset_ph, masked_logrates, compute_full_loss=True )
         elif hps.output_dist.lower() == 'gaussian':
             masked_output_mean = entry_stop_gradients(self.output_mean, grad_binary_mask)
             masked_output_logvar = entry_stop_gradients(self.output_logvar, grad_binary_mask)
             self.loglikelihood_b_t = diag_gaussian_log_likelihood(self.dataset_ph,
                                                                   masked_output_mean, masked_output_logvar)
-        elif hps.output_dist.lower() == 'inverse-gamma':
-            #masked_output_alpha = entry_stop_gradients(self.alpha, grad_binary_mask)
-            masked_output_alpha = self.alpha;
-            masked_output_beta = self.beta;
-            #masked_output_beta = entry_stop_gradients(self.beta, grad_binary_mask)
-            self.loglikelihood_b_t = tf.contrib.distributions.InverseGamma( masked_output_alpha, masked_output_beta ).log_prob( self.dataset_ph )
-            #self.loglikelihood_b_t = InverseGamma( masked_output_alpha, masked_output;
-            
-        # cost for each trial
 
-        #self.log_p_b_train =  (1. / self.cv_keep_ratio)**2 * tf.reduce_mean(
-        #    tf.reduce_mean(self.loglikelihood_b_t * self.cv_binary_mask_batch, [2] ), [1] )
-        # total rec cost (avg over all trials in batch)
-        #self.log_p_train = tf.reduce_mean( self.log_p_b_train, [0])
-        #self.rec_cost_train = -self.log_p_train
-        #ones_ratio = tf.reduce_mean(self.cv_binary_mask_batch)
-
-        self.rec_cost_train = - (1. / self.cv_keep_ratio) * \
+        # costs for held-in samples
+        self.rec_cost_heldin = - (1. / self.cv_keep_ratio) * \
                               tf.reduce_sum(self.loglikelihood_b_t * self.cv_binary_mask_batch) / tf.cast(graph_batch_size, tf.float32)
-        #self.rec_cost_train = -tf.reduce_sum(tf.reduce_mean(self.loglikelihood_b_t, axis=0))
-        #self.rec_cost_train = - tf.reduce_sum(self.loglikelihood_b_t * self.cv_binary_mask_batch) / graph_batch_size
-        #self.rec_cost_train /= ones_ratio
 
-
-        # Valid cost for each trial
-        #self.log_p_b_valid = (1. / (1. - self.cv_keep_ratio))**2 * tf.reduce_mean(
-        #    tf.reduce_mean(self.loglikelihood_b_t * (1. - self.cv_binary_mask_batch), [2] ), [1] )
-        # total rec cost (avg over all trials in batch)
-        #self.log_p_valid = tf.reduce_mean( self.log_p_b_valid, [0])
-        #self.rec_cost_valid = -self.log_p_valid
+        # cost for held-out samples
         if self.cv_keep_ratio != 1.0:
-            self.rec_cost_valid = - (1. / (1. - self.cv_keep_ratio)) * \
+            self.rec_cost_heldout = - (1. / (1. - self.cv_keep_ratio)) * \
                                   tf.reduce_sum(self.loglikelihood_b_t * (1. - self.cv_binary_mask_batch)) / tf.cast(graph_batch_size, tf.float32)
         else:
-            self.rec_cost_valid = tf.constant(np.nan)
-        #self.rec_cost_valid = - tf.reduce_sum(self.loglikelihood_b_t * (1. - self.cv_binary_mask_batch)) / graph_batch_size
-        #self.rec_cost_valid /= (1. - ones_ratio)
-
+            self.rec_cost_heldout = tf.constant(np.nan)
 
         # calculate L2 costs for each network
         # normalized by number of parameters.
@@ -733,12 +676,12 @@ class LFADS(object):
                 l2_numels.append(numel_f)
                 v_l2 = tf.reduce_sum(v*v)
                 l2_costs.append(0.5 * l2_scale * v_l2)
-                #l2_costs.append(tf.nn.l2_loss(v))
+
         if l2_numels:
             self.l2_cost = tf.add_n(l2_costs) / tf.add_n(l2_numels)
 
         ## calculate total training cost
-        self.total_cost = self.l2_weight * self.l2_cost + self.kl_weight * self.kl_cost + self.rec_cost_train
+        self.total_cost = self.l2_weight * self.l2_cost + self.kl_weight * self.kl_cost + self.rec_cost_heldin
         
 
         if hps.do_train_encoder_only:
@@ -771,8 +714,6 @@ class LFADS(object):
         self.train_op = self.opt.apply_gradients(
             zip(self.gradients, self.trainable_vars), global_step = self.train_step)
 
-        #update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-        #self.train_op = tf.group([self.train_op, update_ops])
         # hooks to save down model checkpoints:
         # "save every so often" (i.e., recent checkpoints)
         self.seso_saver = tf.train.Saver(tf.global_variables(),
@@ -865,6 +806,10 @@ class LFADS(object):
 
       return feed_dict
 
+    def get_num_steps_per_epoch(self, datasets, kind='train'):
+        # easy, not so efficient way of getting the number of steps per epoch for all datasets
+        tmp = self.shuffle_and_flatten_datasets(datasets, kind)
+        return len(tmp)
 
 
     def shuffle_and_flatten_datasets(self, datasets, kind='train'):
@@ -931,6 +876,7 @@ class LFADS(object):
 
         return collected_op_values
 
+
     def do_validation(self, datasets, kl_ic_weight, kl_co_weight, dataset_type, kl_weight, l2_weight):
     # do_validation performs an evaluation of the reconstruction cost
     #    can do this on either train or valid datasets
@@ -943,9 +889,10 @@ class LFADS(object):
                                              )
         return collected_op_values
 
+
     def run_epoch(self, datasets, kl_ic_weight, kl_co_weight, dataset_type = "train", run_type="train",
                   kl_weight=1.0, l2_weight=1.0):
-        ops_to_eval = [self.total_cost, self.rec_cost_train, self.rec_cost_valid,
+        ops_to_eval = [self.total_cost, self.rec_cost_heldin, self.rec_cost_heldout,
                        self.kl_cost, self.l2_cost, self.grad_global_norm]
         # get a full list of all data for this type (train/valid)
         all_name_example_idx_pairs = \
@@ -1004,46 +951,27 @@ class LFADS(object):
         evald_ops = np.mean(evald_ops, axis=0)
         return evald_ops
         
-    # MRK the following functions are not used at all
-    # def train_batch(self, dict_from_py):
-    #     session = tf.get_default_session()
-    #     ops_to_eval = [self.train_op, self.total_cost, self.rec_cost_train, \
-    #                          self.kl_cost, self.output_dist_params, self.learning_rate]
-    #     feed_dict = {self.dataset_ph: dict_from_py['dataset_ph'],
-    #                  self.keep_prob: dict_from_py['keep_prob'],
-    #                  self.keep_ratio: dict_from_py['keep_ratio'],
-    #                  self.run_type: kind_dict("train")}
-    #     return session.run(ops_to_eval, feed_dict)
-    #
-    #
-    # def validation_batch(self, dict_from_py):
-    #     session = tf.get_default_session()
-    #     ops_to_eval = [self.total_cost, self.rec_cost_train, self.kl_cost]
-    #     feed_dict = {self.input_data: dict_from_py['input_data'],
-    #                  self.keep_prob: 1.0, # don't need to lower keep_prob from validation
-    #                  self.keep_ratio: 1.0,
-    #                  self.run_type: kind_dict("train")}
-    #     return session.run(ops_to_eval, feed_dict)
-
 
     def run_learning_rate_decay_opt(self):
     # decay the learning rate 
         session = tf.get_default_session()
         session.run(self.learning_rate_decay_op)
 
+
     def get_learning_rate(self):
     # return the current learning rate
         session = tf.get_default_session()
         return session.run(self.learning_rate)
 
-    def get_kl_l2_weights(self, session):
+
+    def get_kl_l2_weights(self, nepoch):
     # MRK, get the KL and L2 ramp weights
-        train_step = session.run(self.train_step)
-        l2_weight = float(train_step - self.hps['l2_start_step'] + 1) / float(self.hps['l2_increase_steps'])
+        #train_step = session.run(self.train_step)
+        l2_weight = (nepoch - self.hps['l2_start_epoch']) / (self.hps['l2_increase_epochs'] + 1.)
         # clip to 0-1
         l2_weight = min(max(l2_weight, 0), 1)
 
-        kl_weight = float(train_step - self.hps['kl_start_step'] + 1) / float(self.hps['kl_increase_steps'])
+        kl_weight = (nepoch - self.hps['kl_start_epoch']) / (self.hps['kl_increase_epochs'] + 1.)
         # clip to 0-1
         kl_weight = min(max(kl_weight, 0.0), 1.0)
 
@@ -1057,51 +985,39 @@ class LFADS(object):
         hps = self.hps
 
         # check to see if there are any validation datasets
-        has_any_valid_set = False
-        for data_dict in datasets.values():
-          if data_dict['valid_data'] is not None:
-            has_any_valid_set = True
-            break
-
-
-
-        # monitor the learning rate
-        lr = self.get_learning_rate()
-        lr_stop = hps.learning_rate_stop
+        #has_any_valid_set = False
+        #for data_dict in datasets.values():
+        #  if data_dict['valid_data'] is not None:
+        #    has_any_valid_set = True
+        #    break
 
         # epoch counter
-        nepoch = 0
+        train_step = session.run(self.train_step)
+
+        num_steps_per_epoch = self.get_num_steps_per_epoch(datasets) # training steps
+        nepoch = train_step // num_steps_per_epoch
         nepoch_cnt = 0
-        lve_epoch = 0
-
-        num_save_checkpoint = 1     # save checkpoints every num_save_checkpoint steps
-
-        # TODO: modify to work with multiple datasets
-        name=datasets.keys()[0]
-        
-        data_dict = datasets[name]
-        #data_extxd = data_dict["train_data"]
-        #his_batch = data_extxd[0:hps['batch_size'],:,:]
+        lve_epoch = nepoch
 
         valid_costs = []
 
-        kl_weight, l2_weight = self.get_kl_l2_weights(session)
+        kl_weight, l2_weight = self.get_kl_l2_weights(nepoch)
         # print validation costs before the first training step
         val_total_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, val_kl_cost, val_l2_cost ,_= \
             self.do_validation(datasets,
                              kl_ic_weight=hps['kl_ic_weight'],
                              kl_co_weight=hps['kl_co_weight'],
-                             dataset_type="train",
+                             dataset_type="valid",
                              kl_weight=kl_weight,
                              l2_weight=l2_weight)
-        train_step = session.run(self.train_step)
-        self.printlog("Epoch:%d, step:%d (TRAIN, VALID): total: %.2f, %.2f\
-        recon: %.2f, %.2f, %.2f,    kl: %.2f, %.2f, kl weight: %.2f" % \
-              (-1, train_step, 0, val_total_cost,
-               0, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, 0, val_kl_cost,
-               kl_weight))
-        # pre-load the lve checkpoint (used in case of loaded checkpoint)
 
+        self.printlog("Epoch:%d, step:%d (TRAIN, VALID): total: None, %.2f\
+        recon: None, %.2f, %.2f,    kl: None, %.2f, kl weight: %.2f" % \
+              (nepoch-1, train_step, val_total_cost,
+               valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, val_kl_cost,
+               kl_weight))
+
+        # pre-load the lve checkpoint (used in case of loaded checkpoint)
         if target_num_epochs is not None and hps['checkpoint_pb_load_name'] == 'checkpoint_lve':
             self.lve = valid_set_heldin_samp_cost
         else:
@@ -1109,26 +1025,29 @@ class LFADS(object):
         self.trial_recon_cost = valid_set_heldin_samp_cost
         self.samp_recon_cost = valid_set_heldout_samp_cost
 
-        coef = 1.0 # smoothing coefficient - lower values mean more smoothing
+        coef = 0.7 # smoothing coefficient for valid cost - lower values mean more smoothing
 
         # calculate R^2 if true data is available
+        name = datasets.keys()[0]
+        data_dict = datasets[name]
         do_r2_calc = data_dict['train_truth'] is not None and hps['do_calc_r2']
 
+        lr = self.get_learning_rate()
+        self.printlog('Starting learning rate: ', lr)
         while True:
             new_lr = self.get_learning_rate()
-            #self.printlog('Starting learning rate: ', new_lr)
             # should we stop?
             if target_num_epochs is None:
                 if new_lr < hps['learning_rate_stop']:
-                    self.printlog("Learning rate criteria met")
+                    self.printlog("Learning rate criteria met!")
                     break
             else:
                 if nepoch_cnt == target_num_epochs:  # nepoch starts at 0
-                    self.printlog("Num epoch criteria met. "
+                    self.printlog("Num epoch criteria met!"
                           "Completed {} epochs.".format(nepoch_cnt))
                     break
 
-            do_save_ckpt = True if nepoch % num_save_checkpoint == 0 else False
+            do_save_ckpt = True if nepoch % hps['ckpt_save_interval'] == 0 else False
             # always save checkpoint for the last epoch
             if target_num_epochs is not None:
                 do_save_ckpt = True if nepoch == (target_num_epochs-1) else do_save_ckpt
@@ -1136,25 +1055,28 @@ class LFADS(object):
             start_time = time.time()
 
             # MRK, get the KL and L2 ramp weights
-            kl_weight, l2_weight = self.get_kl_l2_weights(session)
+            # changed this to work based on Epochs (not steps)
+            kl_weight, l2_weight = self.get_kl_l2_weights(nepoch)
 
             # CP/MRK: we no longer use these step-specific outputs
-            #tr_total_cost, train_set_heldin_samp_cost, train_set_heldout_samp_cost, tr_kl_cost = \
-            trout = self.train_epoch(datasets, do_save_ckpt=do_save_ckpt,
+            # MRK, reverted the above, don't evaluate separately on training data (unless for testing) to save time
+            # training cost is not used for anything that can affect the training
+            tr_total_cost, train_set_heldin_samp_cost, train_set_heldout_samp_cost, tr_kl_cost, _, norms= \
+                self.train_epoch(datasets, do_save_ckpt=do_save_ckpt,
                                  kl_ic_weight = hps['kl_ic_weight'],
                                  kl_co_weight = hps['kl_co_weight'],
                                  kl_weight=kl_weight,
                                  l2_weight=l2_weight)
             
-            tr_total_cost, train_set_heldin_samp_cost, train_set_heldout_samp_cost, tr_kl_cost, l2_cost,_ = \
-                self.do_validation(datasets,
-                                 kl_ic_weight = hps['kl_ic_weight'],
-                                 kl_co_weight = hps['kl_co_weight'],
-                                 dataset_type="train",
-                                 kl_weight=kl_weight,
-                                 l2_weight=l2_weight)
+            #tr_total_cost, train_set_heldin_samp_cost, train_set_heldout_samp_cost, tr_kl_cost, l2_cost, _ = \
+            #    self.do_validation(datasets,
+            #                     kl_ic_weight = hps['kl_ic_weight'],
+            #                     kl_co_weight = hps['kl_co_weight'],
+            #                     dataset_type="train",
+            #                     kl_weight=kl_weight,
+            #                     l2_weight=l2_weight)
 
-            val_total_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, val_kl_cost, _ ,_ = \
+            val_total_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost, val_kl_cost, l2_cost,_ = \
                 self.do_validation(datasets,
                                  kl_ic_weight = hps['kl_ic_weight'],
                                  kl_co_weight = hps['kl_co_weight'],
@@ -1171,73 +1093,24 @@ class LFADS(object):
                 self.samp_recon_cost = np.nan
                 break
 
-            # Evaluate the model with posterior mean sampling
-            #'''
+            # Evaluate the model (by R^2) with posterior mean sampling if truth data exists 
             # every 10 epochs
             if do_r2_calc and (nepoch % 10 == 0):
-                all_valid_R2_heldin = []
-                all_valid_R2_heldout = []
-                all_train_R2_heldin = []
-                all_train_R2_heldout = []
-                for data_name, data_dict in datasets.items():
-                    # Validation R^2
-                    data_kind, data_extxd = ('valid', data_dict['valid_data'])
-                    ext_input_extxd = data_dict['valid_ext_input']
-                    model_runs = self.eval_model_runs_avg_epoch(data_name, data_extxd, ext_input_extxd, pm_batch_size=1,
-                                                                do_average_batch=True)
-                    lfads_output = model_runs['output_dist_params']
-                    if hps.output_dist.lower() == 'poisson':
-                        lfads_output = lfads_output
-                    elif hps.output_dist.lower() == 'gaussian':
-                        raise NameError("Not implemented!")
-                    elif hps.output_dist.lower() == 'inverse-gamma':
-                        raise NameError("Not implemented!")
-                    # Get R^2
-                    data_true = data_dict['valid_truth']
-                    data_cvmask = data_dict['valid_data_cvmask']
-                    heldin, heldout = self.get_R2(data_true, lfads_output, data_cvmask)
-                    all_valid_R2_heldin.append(heldin)
-                    all_valid_R2_heldout.append(heldout)
-
-                    # training R^2
-                    data_kind, data_extxd = ('train', data_dict['train_data'])
-                    ext_input_extxd = data_dict['train_ext_input']
-                    model_runs = self.eval_model_runs_avg_epoch(data_name, data_extxd, ext_input_extxd, pm_batch_size=1,
-                                                                do_average_batch=True)
-                    lfads_output = model_runs['output_dist_params']
-                    if hps.output_dist.lower() == 'poisson':
-                        lfads_output = lfads_output
-                    elif hps.output_dist.lower() == 'gaussian':
-                        raise NameError("Not implemented!")
-                    elif hps.output_dist.lower() == 'inverse-gamma':
-                        raise NameError("Not implemented!")
-                    # Get R^2
-                    data_true = data_dict['train_truth']
-                    data_cvmask = data_dict['train_data_cvmask']
-                    heldin, heldout = self.get_R2(data_true, lfads_output, data_cvmask)
-                    all_train_R2_heldin.append(heldin)
-                    all_train_R2_heldout.append(heldout)
-
-                all_valid_R2_heldin = np.mean(all_valid_R2_heldin)
-                all_valid_R2_heldout = np.mean(all_valid_R2_heldout)
-
-                all_train_R2_heldin = np.mean(all_train_R2_heldin)
-                all_train_R2_heldout = np.mean(all_train_R2_heldout)
+                all_valid_R2_heldin, all_valid_R2_heldout, all_train_R2_heldin, all_train_R2_heldout = \
+                    self.get_R2(datasets)
             else:
-                all_valid_R2_heldin = np.nan
-                all_valid_R2_heldout = np.nan
-                all_train_R2_heldin = np.nan
-                all_train_R2_heldout = np.nan
+                all_valid_R2_heldin, all_valid_R2_heldout, all_train_R2_heldin, all_train_R2_heldout = \
+                (np.nan, np.nan, np.nan, np.nan)
 
             # initialize the running average
-            if nepoch == 0:
-                smth_trial_val_recn_cost = valid_set_heldin_samp_cost
-                smth_samp_val_recn_cost = train_set_heldout_samp_cost
+            if nepoch_cnt == 0:
+                smth_heldin_val_recn_cost = valid_set_heldin_samp_cost
+                smth_heldout_val_recn_cost = train_set_heldout_samp_cost
 
             # recon cost over validation trials
-            smth_trial_val_recn_cost = (1. - coef) * smth_trial_val_recn_cost + coef * valid_set_heldin_samp_cost
+            smth_heldin_val_recn_cost = (1. - coef) * smth_heldin_val_recn_cost + coef * valid_set_heldin_samp_cost
             # recon cost over dropped samples
-            smth_samp_val_recn_cost = (1. - coef) * smth_samp_val_recn_cost + coef * train_set_heldout_samp_cost
+            smth_heldout_val_recn_cost = (1. - coef) * smth_heldout_val_recn_cost + coef * train_set_heldout_samp_cost
 
             train_step = session.run(self.train_step)
             if np.isnan(all_train_R2_heldin):
@@ -1246,35 +1119,32 @@ class LFADS(object):
                        train_set_heldin_samp_cost, train_set_heldout_samp_cost, valid_set_heldin_samp_cost,
                        tr_kl_cost, val_kl_cost, l2_cost, kl_weight, l2_weight))
             else:
-                self.printlog("Epoch:%d, step:%d (TRA,VAL_SAMP,VAL_TRI): tot:%.2f,%.2f, rec:%.2f,%.2f,%.2f, kl:%.2f,%.2f, l2:%.4f, kl_weight:%.2f, l2_weight:%.2f, R^2(T/V:Held-in,Held-out),%.3f,%.3f,%.3f,%.3f" % \
+                self.printlog("Epoch:%d, step:%d (TRA,VAL_SAMP,VAL_TRI): tot:%.2f,%.2f, rec:%.2f,%.2f,%.2f, kl:%.2f,%.2f, l2:%.4f, kl_weight:%.2f, l2_weight:%.2f, "
+                              "R^2(T/V:Held-in,Held-out),%.3f,%.3f,%.3f,%.3f" % \
                       (nepoch, train_step, tr_total_cost, val_total_cost,
                        train_set_heldin_samp_cost, train_set_heldout_samp_cost, valid_set_heldin_samp_cost,
                        tr_kl_cost, val_kl_cost, l2_cost, kl_weight, l2_weight,
                        all_train_R2_heldin, all_train_R2_heldout, all_valid_R2_heldin, all_valid_R2_heldout,))
 
-            is_lve = smth_trial_val_recn_cost < self.lve and (kl_weight == 1. and l2_weight == 1.)
+            is_lve = smth_heldin_val_recn_cost < self.lve and (kl_weight == 1. and l2_weight == 1.)
 
             # Making parameters available for lfads_wrappper
             if hps['checkpoint_pb_load_name'] == 'checkpoint_lve':
                 # if we are returning lve costs
                 if is_lve:
-                    self.trial_recon_cost = smth_trial_val_recn_cost
-                    self.samp_recon_cost = smth_samp_val_recn_cost
+                    self.trial_recon_cost = smth_heldin_val_recn_cost
+                    self.samp_recon_cost = smth_heldout_val_recn_cost
             else:
-                self.trial_recon_cost = smth_trial_val_recn_cost
-                self.samp_recon_cost = smth_samp_val_recn_cost
+                self.trial_recon_cost = smth_heldin_val_recn_cost
+                self.samp_recon_cost = smth_heldout_val_recn_cost
 
             # MRK, moved this here to get the right for the checkpoint train_step
             if is_lve:
                 # new lowest validation error
-                self.lve = smth_trial_val_recn_cost
-                # MRK, make lve accessible from the model class
-                #self.lve = lve
+                self.lve = smth_heldin_val_recn_cost
                 lve_epoch = nepoch
                 checkpoint_path = os.path.join(self.hps.lfads_save_dir,
                                                self.hps.checkpoint_name + '_lve.ckpt')
-                # MRK, for convenience, it can be reconstructed from the paths in hps
-                #self.lve_checkpoint = checkpoint_path
 
                 self.lve_saver.save(session, checkpoint_path,
                                     global_step=self.train_step,
@@ -1297,9 +1167,7 @@ class LFADS(object):
                 with open(csv_file, "a") as myfile:
                     myfile.write(csv_outstr)
 
-
-            norms = trout[5]
-            print(norms.shape)
+            # save gradients norms to a file (used for testing)
             csv_file = os.path.join(self.hps.lfads_save_dir, 'gradnorms.csv')
             with open(csv_file, "a") as myfile:
                 myfile.write('{}\n'.format(norms))
@@ -1311,18 +1179,11 @@ class LFADS(object):
             #    close_all_plots()
 
             # should we decrement learning rate?
-            # MRK, for PBT we can set n_lr to np.inf
-            n_lr = int(hps['learning_rate_n_to_compare'])
+            # MRK, for PBT we can set learning_rate_n_to_compare to 0 to disable the LR annealing
+            n_lr = hps['learning_rate_n_to_compare']
 
             # MRK, change the LR decay based on valid cost (previously was based on train cost)
-            #valid_cost_to_use = val_total_cost
-            # use training cost for learning rate annealing
-            #valid_cost_to_use = tr_total_cost
             valid_cost_to_use = val_total_cost
-
-            #if n_lr > 0 and len(valid_costs) > n_lr and (valid_cost_to_use > max(valid_costs[-n_lr:])):
-            #    self.printlog("Decreasing learning rate")
-            #    self.run_learning_rate_decay_opt()
 
             # MRK, only decrease the LR/early stop if we are done ramping the weights
             if kl_weight == 1. and l2_weight == 1.:
@@ -1331,21 +1192,17 @@ class LFADS(object):
                     lr = session.run( self.learning_rate )
                     self.printlog("Decreasing learning rate to ", lr)
                     valid_costs.append(np.inf)
-
                 nepoch_cnt += 1
 
-                # early stopping when no improvement of validation cost for 3*n_lr
-                #if len(valid_costs) > n_lr*3 and valid_cost_to_use > np.max(valid_costs[-n_lr*3:]):
+                # early stopping when no improvement of validation cost
                 if n_lr > 0 and nepoch - lve_epoch > hps['n_epochs_early_stop'] + 1:
                     self.printlog("No improvement on the validation cost! Stopping the training!")
                     break
 
                 valid_costs.append(valid_cost_to_use)
-                #train_costs.append(tr_total_cost)
+
             nepoch += 1
-
-            
-
+          
 
     def eval_model_runs_batch(self, data_name, data_bxtxd, ext_input_bxtxi,
                               do_eval_cost=False, do_average_batch=False):
@@ -1403,6 +1260,7 @@ class LFADS(object):
         return np_vals_flat
     #        tf_vals_flat, fidxs = flatten(tf_vals)
             
+    
     # this does the bulk of posterior sample & mean
     def eval_model_runs_avg_epoch(self, data_name, data_extxd, ext_input_bxtxi, pm_batch_size=None,
                                   do_average_batch=False):
@@ -1533,7 +1391,57 @@ class LFADS(object):
         # return the dict
         return model_runs
 
-    def get_R2(self, data_true, data_est, mask):
+
+    def get_R2(self, datasets):
+        hps = self.hps
+        all_valid_R2_heldin = []
+        all_valid_R2_heldout = []
+        all_train_R2_heldin = []
+        all_train_R2_heldout = []
+        for data_name, data_dict in datasets.items():
+            # Validation R^2
+            data_kind, data_extxd = ('valid', data_dict['valid_data'])
+            ext_input_extxd = data_dict['valid_ext_input']
+            model_runs = self.eval_model_runs_avg_epoch(data_name, data_extxd, ext_input_extxd, pm_batch_size=1,
+                                                        do_average_batch=True)
+            lfads_output = model_runs['output_dist_params']
+            if hps.output_dist.lower() == 'poisson':
+                lfads_output = lfads_output
+            elif hps.output_dist.lower() == 'gaussian':
+                raise NameError("Not implemented!")
+            elif hps.output_dist.lower() == 'inverse-gamma':
+                raise NameError("Not implemented!")
+            # Get R^2
+            data_true = data_dict['valid_truth']
+            data_cvmask = data_dict['valid_data_cvmask']
+            heldin, heldout = self.calc_R2(data_true, lfads_output, data_cvmask)
+            all_valid_R2_heldin.append(heldin)
+            all_valid_R2_heldout.append(heldout)
+
+            # training R^2
+            data_kind, data_extxd = ('train', data_dict['train_data'])
+            ext_input_extxd = data_dict['train_ext_input']
+            model_runs = self.eval_model_runs_avg_epoch(data_name, data_extxd, ext_input_extxd, pm_batch_size=1,
+                                                        do_average_batch=True)
+            lfads_output = model_runs['output_dist_params']
+            if hps.output_dist.lower() == 'poisson':
+                lfads_output = lfads_output
+            elif hps.output_dist.lower() == 'gaussian':
+                raise NameError("Not implemented!")
+            elif hps.output_dist.lower() == 'inverse-gamma':
+                raise NameError("Not implemented!")
+            # Get R^2
+            data_true = data_dict['train_truth']
+            data_cvmask = data_dict['train_data_cvmask']
+            heldin, heldout = self.calc_R2(data_true, lfads_output, data_cvmask)
+            all_train_R2_heldin.append(heldin)
+            all_train_R2_heldout.append(heldout)
+
+        return np.mean(all_valid_R2_heldin), np.mean(all_valid_R2_heldout), np.mean(all_train_R2_heldin), np.mean(all_train_R2_heldout)
+         
+   
+    @staticmethod
+    def calc_R2(data_true, data_est, mask):
         """Calculate the R^2 between the true rates and LFADS output, over all
         trials and all channels
         """
@@ -1549,6 +1457,7 @@ class LFADS(object):
             R2_heldin = np.corrcoef(true_flat, est_flat) ** 2.0
             return R2_heldin[0, 1], np.nan
 
+    
     # this calls self.eval_model_runs_avg_epoch to get the posterior means
     # then it writes all the data to file
     def write_model_runs(self, datasets, output_fname=None):

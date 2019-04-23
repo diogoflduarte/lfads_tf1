@@ -16,6 +16,7 @@ from helper_funcs import kind_dict, kind_dict_key
 ## need to implement:
 MAX_CKPT_TO_KEEP = 5
 MAX_CKPT_TO_KEEP_LVE = 5
+CKPT_SAVE_INTERVAL = 5
 CSV_LOG = "fitlog"
 OUTPUT_FILENAME_STEM = ""
 CHECKPOINT_PB_LOAD_NAME = "checkpoint"
@@ -40,7 +41,7 @@ LEARNING_RATE_INIT = 0.01
 LEARNING_RATE_DECAY_FACTOR = 0.95
 LEARNING_RATE_STOP = 0.00001
 LEARNING_RATE_N_TO_COMPARE = 6
-N_EPOCHS_EARLY_STOP = 300000
+N_EPOCHS_EARLY_STOP = 100 # epochs
 DO_RESET_LEARNING_RATE = False
 
 # flag to only allow training of the encoder (i.e., lock the generator, factors readout, rates readout, controller, etc weights)
@@ -83,10 +84,10 @@ IC_PRIOR_VAR = 0.1
 IC_POST_VAR_MIN = 0.0001      # protection from KL blowing up
 CO_PRIOR_VAR = 0.1
 
-KL_START_STEP = 0
-L2_START_STEP = 0
-KL_INCREASE_STEPS = 500
-L2_INCREASE_STEPS = 500
+KL_START_EPOCH = 0
+L2_START_EPOCH = 0
+KL_INCREASE_EPOCHS = 500
+L2_INCREASE_EPOCHS = 500
 
 # params for autoregressive prior for the controller (not used now)
 PRIOR_AR_AUTOCORRELATION = 10.0
@@ -140,6 +141,9 @@ flags.DEFINE_integer("ps_nexamples_to_process", PS_NEXAMPLES_TO_PROCESS,
 flags.DEFINE_integer("max_ckpt_to_keep_lve", MAX_CKPT_TO_KEEP_LVE,
                  "Max # of checkpoints to keep for lowest validation error \
                  models (rolling)")
+
+flags.DEFINE_integer("ckpt_save_interval", CKPT_SAVE_INTERVAL,
+                 "Number of epochs between saving (non-lve) checkpoints")
 
 
 # GENERATION
@@ -206,16 +210,16 @@ flags.DEFINE_float("co_prior_var", CO_PRIOR_VAR,
 # stuck.  These two parameters will help avoid that by by getting the
 # optimization to 'latch' on to the main optimization, and only
 # turning in the regularizers later.
-flags.DEFINE_integer("kl_start_step", KL_START_STEP,
+flags.DEFINE_integer("kl_start_epoch", KL_START_EPOCH,
                      "Start increasing weight after this many steps.")
-# training passes, not epochs, increase by 0.5 every kl_increase_steps
-flags.DEFINE_integer("kl_increase_steps", KL_INCREASE_STEPS,
+# training passes, not epochs, increase by 0.5 every kl_increase_epochs
+flags.DEFINE_integer("kl_increase_epochs", KL_INCREASE_EPOCHS,
                      "Increase weight of kl cost to avoid local minimum.")
 # Same story for l2 regularizer.  One wants a simple generator, for scientific
 # reasons, but not at the expense of hosing the optimization.
-flags.DEFINE_integer("l2_start_step", L2_START_STEP,
+flags.DEFINE_integer("l2_start_epoch", L2_START_EPOCH,
                      "Start increasing l2 weight after this many steps.")
-flags.DEFINE_integer("l2_increase_steps", L2_INCREASE_STEPS,
+flags.DEFINE_integer("l2_increase_epochs", L2_INCREASE_EPOCHS,
                      "Increase weight of l2 cost to avoid local minimum.")
 
 
@@ -500,6 +504,7 @@ def build_hyperparameter_dict(flags):
   d['output_filename_stem'] = flags.output_filename_stem
   d['max_ckpt_to_keep'] = flags.max_ckpt_to_keep
   d['max_ckpt_to_keep_lve'] = flags.max_ckpt_to_keep_lve
+  d['ckpt_save_interval'] = flags.ckpt_save_interval
   d['ps_nexamples_to_process'] = flags.ps_nexamples_to_process
   d['data_filename_stem'] = flags.data_filename_stem
   d['device'] = flags.device
@@ -565,10 +570,10 @@ def build_hyperparameter_dict(flags):
   d['kl_ic_weight'] = flags.kl_ic_weight
   d['kl_co_weight'] = flags.kl_co_weight
 
-  d['kl_start_step'] = flags.kl_start_step
-  d['kl_increase_steps'] = flags.kl_increase_steps
-  d['l2_start_step'] = flags.l2_start_step
-  d['l2_increase_steps'] = flags.l2_increase_steps
+  d['kl_start_epoch'] = flags.kl_start_epoch
+  d['kl_increase_epochs'] = flags.kl_increase_epochs
+  d['l2_start_epoch'] = flags.l2_start_epoch
+  d['l2_increase_epochs'] = flags.l2_increase_epochs
 
   # Loss scaling/Adam Optimizer Presets
   d['loss_scale'] = flags.loss_scale
