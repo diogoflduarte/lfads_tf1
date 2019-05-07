@@ -518,8 +518,6 @@ class LFADS(object):
                 nonlin = 'exp'
             elif hps.output_dist.lower() == 'gaussian':
                 nonlin = None
-            elif hps.output_dist.lower() == 'inverse-gamma':
-                nonlin = None
             else:
                 raise NameError("Unknown output distribution: " + hps.output_dist)
                 
@@ -542,11 +540,6 @@ class LFADS(object):
                 self.output_mean, self.output_logvar = tf.split(rates_object.output,
                                                                 2, axis=2)
                 self.output_dist_params=rates_object.output
-            elif hps.output_dist.lower() == 'inverse-gamma':
-                self.alpha, self.beta = tf.split( rates_object.output, 2, axis=2 )
-                self.alpha = tf.round( tf.nn.relu( self.alpha ) + 1 )
-                self.beta = tf.nn.relu( self.beta ) + 1 
-                self.output_dist_params=rates_object.output
 
 
         ## calculate the KL cost
@@ -564,7 +557,7 @@ class LFADS(object):
         self.kl_cost_g0_b = KLCost_GaussianGaussian(self.gen_ics_posterior,
                                                     self.gen_ics_prior).kl_cost_b
         # scale it
-        self.kl_cost_g0 = self.kl_cost_g0_b * self.kl_ic_weight
+        self.kl_cost_g0 = self.kl_cost_g0_b
 
         self.kl_cost_co = tf.constant(0.0)
         if hps['co_dim'] > 0:
@@ -606,10 +599,11 @@ class LFADS(object):
                                                               self.cos_prior).kl_cost_b
 
             # CO KL cost for the batch
-            self.kl_cost_co = self.kl_cost_co_b_t * self.kl_co_weight
+            self.kl_cost_co = self.kl_cost_co_b_t
 
         # average over the batch dim only
-        self.kl_cost = tf.reduce_mean(self.kl_cost_g0 + self.kl_cost_co)
+        self.kl_cost = self.kl_ic_weight * tf.reduce_mean(self.kl_cost_g0) + \
+                       self.kl_co_weight * tf.reduce_mean(self.kl_cost_co)
 
         ## calculate reconstruction cost
         # get final mask for gradient blocking
@@ -967,11 +961,11 @@ class LFADS(object):
     def get_kl_l2_weights(self, nepoch):
     # MRK, get the KL and L2 ramp weights
         #train_step = session.run(self.train_step)
-        l2_weight = (nepoch - self.hps['l2_start_epoch']) / (self.hps['l2_increase_epochs'] + 1.)
+        l2_weight = (nepoch - self.hps['l2_start_epoch'] + 1.) / (self.hps['l2_increase_epochs'] + 1.)
         # clip to 0-1
         l2_weight = min(max(l2_weight, 0), 1)
 
-        kl_weight = (nepoch - self.hps['kl_start_epoch']) / (self.hps['kl_increase_epochs'] + 1.)
+        kl_weight = (nepoch - self.hps['kl_start_epoch'] + 1.) / (self.hps['kl_increase_epochs'] + 1.)
         # clip to 0-1
         kl_weight = min(max(kl_weight, 0.0), 1.0)
 

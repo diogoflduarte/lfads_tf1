@@ -65,7 +65,15 @@ class BidirectionalDynamicRNN(object):
             self.cell = tf.nn.rnn_cell.GRUCell(num_units=state_dim)
             #self.cell = tf.contrib.cudnn_rnn.CudnnCompatibleGRUCell(num_units=state_dim)
         elif rnn_type.lower() == 'customgru':
-            self.cell = GRUCell(num_units = state_dim,
+          with tf.variable_scope('ci_enc'):
+            with tf.variable_scope('fw_gru'):
+              self.cell_fw = GRUCell(num_units = state_dim,
+                                      #batch_size = batch_size,
+                                      clip_value = clip_value,
+                                      recurrent_collections = recurrent_collections
+                                      )
+            with tf.variable_scope('bw_gru'):
+              self.cell_bw = GRUCell(num_units = state_dim,
                                       #batch_size = batch_size,
                                       clip_value = clip_value,
                                       recurrent_collections = recurrent_collections
@@ -77,8 +85,8 @@ class BidirectionalDynamicRNN(object):
             inputs = tf.zeros([batch_size, sequence_lengths, 1],
                               dtype=tf.float32)
         self.states, self.last = tf.nn.bidirectional_dynamic_rnn(
-            cell_fw=self.cell,
-            cell_bw=self.cell,
+            cell_fw=self.cell_fw,
+            cell_bw=self.cell_bw,
             dtype=tf.float32,
             inputs=inputs,
             initial_state_fw=self.init_fw,
