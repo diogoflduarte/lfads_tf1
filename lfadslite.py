@@ -442,18 +442,14 @@ class LFADS(object):
             con_init_state = makeInitialState(used_con_dim,
                                               graph_batch_size,
                                               'controller')
-            co_mean_init_state = makeInitialState(hps['co_dim'],
-                                                  graph_batch_size,
-                                                  'controller_output_mean')
-            co_logvar_init_state = makeInitialState(hps['co_dim'],
-                                                    graph_batch_size,
-                                                    'controller_output_logvar')
-            co_sample_init_state = makeInitialState(hps['co_dim'],
-                                                    graph_batch_size,
-                                                    'controller_output_sample')
-            fac_init_state = makeInitialState(hps['factors_dim'],
-                                              graph_batch_size,
-                                              'factor')
+
+            # MRK we shouldn't initialize anything other than con_state as trainable
+            # the rest of initial states in ComplexCell are not used for anything
+            co_mean_init_state = tf.zeros(tf.stack([graph_batch_size, hps['co_dim']]))
+            co_logvar_init_state = tf.zeros(tf.stack([graph_batch_size, hps['co_dim']]))
+            co_sample_init_state = tf.zeros(tf.stack([graph_batch_size, hps['co_dim']]))
+            fac_init_state = tf.zeros(tf.stack([graph_batch_size, hps['factors_dim']]))
+
             comcell_init_state = [self.gen_ics, con_init_state,
                                        co_mean_init_state, co_logvar_init_state,
                                        co_sample_init_state, fac_init_state]

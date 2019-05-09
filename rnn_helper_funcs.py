@@ -48,36 +48,34 @@ class BidirectionalDynamicRNN(object):
                 # lstm state is a tuple
                 init_fw = tf.contrib.rnn.LSTMStateTuple(self.init_c_fw_tiled, self.init_h_fw_tiled)
                 init_bw = tf.contrib.rnn.LSTMStateTuple(self.init_c_bw_tiled, self.init_h_bw_tiled)
-                self.init_fw = tf.zeros_like( init_fw )
-                self.init_bw = tf.zeros_like( init_bw )
+                self.init_fw = init_fw
+                self.init_bw = init_bw
             else:
-                self.init_fw = tf.zeros_like( self.init_h_fw_tiled )
-                self.init_bw = tf.zeros_like( self.init_h_bw_tiled )
+                self.init_fw = self.init_h_fw_tiled
+                self.init_bw = self.init_h_bw_tiled
                 
         else:  # if initial state is None
             self.init_fw, self.init_bw = initial_state
 
         # pick your cell
         if rnn_type.lower() == 'lstm':
-            self.cell = tf.nn.rnn_cell.LSTMCell(num_units=state_dim,
+            self.cell_fw = tf.nn.rnn_cell.LSTMCell(num_units=state_dim,
+                                                state_is_tuple=True)
+            self.cell_bw = tf.nn.rnn_cell.LSTMCell(num_units=state_dim,
                                                 state_is_tuple=True)
         elif rnn_type.lower() == 'gru':
-            self.cell = tf.nn.rnn_cell.GRUCell(num_units=state_dim)
-            #self.cell = tf.contrib.cudnn_rnn.CudnnCompatibleGRUCell(num_units=state_dim)
+            self.cell_fw = tf.nn.rnn_cell.GRUCell(num_units=state_dim)
+            self.cell_bw = tf.nn.rnn_cell.GRUCell(num_units=state_dim)
+
         elif rnn_type.lower() == 'customgru':
-          with tf.variable_scope('ci_enc'):
-            with tf.variable_scope('fw_gru'):
-              self.cell_fw = GRUCell(num_units = state_dim,
-                                      #batch_size = batch_size,
-                                      clip_value = clip_value,
-                                      recurrent_collections = recurrent_collections
-                                      )
-            with tf.variable_scope('bw_gru'):
-              self.cell_bw = GRUCell(num_units = state_dim,
-                                      #batch_size = batch_size,
-                                      clip_value = clip_value,
-                                      recurrent_collections = recurrent_collections
-                                      )
+            self.cell_fw = GRUCell(num_units = state_dim,
+                                  clip_value = clip_value,
+                                  recurrent_collections = recurrent_collections
+                                  )
+            self.cell_bw = GRUCell(num_units = state_dim,
+                                  clip_value = clip_value,
+                                  recurrent_collections = recurrent_collections
+                                  )
         else:
             raise ValueError("Didn't understand rnn_type '%s'."%(rnn_type))
 
