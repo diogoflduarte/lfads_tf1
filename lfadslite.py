@@ -647,14 +647,11 @@ class LFADS(object):
                             'l2_con',
                             'l2_ic_enc',
                             'l2_ci_enc',
-                            'l2_gen_2_factors',
-                            'l2_ci_enc_2_co_in',
                             ]
 
         l2_reg_scales = [hps.l2_gen_scale, hps.l2_con_scale,
                          hps.l2_ic_enc_scale, hps.l2_ci_enc_scale,
-                         hps.l2_gen_2_factors_scale,
-                         hps.l2_ci_enc_2_co_in]
+                         ]
         for l2_reg, l2_scale in zip(l2_reg_var_lists, l2_reg_scales):
             if l2_scale == 0:
                 continue
