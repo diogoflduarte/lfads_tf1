@@ -710,9 +710,9 @@ class LFADS(object):
             self.l2_cost = tf.add_n(l2_costs) / tf.add_n(l2_numels)
 
         ## calculate total training cost
-        self.total_cost = hps['loss_scale']*( self.l2_weight * self.l2_cost + self.kl_weight * self.kl_cost) + \
-         hps['loss_scale']*self.rec_cost_heldin
-        
+        self.total_cost = self.l2_weight * self.l2_cost + self.kl_weight * self.kl_cost + self.rec_cost_heldin
+        total_cost_scaled = hps['loss_scale'] * self.total_cost
+
 
         if hps.do_train_encoder_only:
             # get the list of ci_enc and ic_enc variables
@@ -728,7 +728,7 @@ class LFADS(object):
 
         self.trainable_vars = trainable_vars
         
-        self.gradients = tf.gradients(self.total_cost, self.trainable_vars)
+        self.gradients = tf.gradients(total_cost_scaled, self.trainable_vars)
         self.gradients, self.grad_global_norm = \
                                                 tf.clip_by_global_norm(
                                                     self.gradients, \
