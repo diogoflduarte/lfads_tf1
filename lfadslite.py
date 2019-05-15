@@ -1029,7 +1029,7 @@ class LFADS(object):
                     self.printlog("Learning rate criteria met!")
                     break
             else:
-                if nepoch_cnt == target_num_epochs:  # nepoch starts at 0
+                if nepoch_cnt == target_num_epochs:  # nepoch_cnt starts at 0
                     self.printlog("Num epoch criteria met!"
                           "Completed {} epochs.".format(nepoch_cnt))
                     break
@@ -1037,7 +1037,7 @@ class LFADS(object):
             do_save_ckpt = True if nepoch % hps['ckpt_save_interval'] == 0 else False
             # always save checkpoint for the last epoch
             if target_num_epochs is not None:
-                do_save_ckpt = True if nepoch == (target_num_epochs-1) else do_save_ckpt
+                do_save_ckpt = True if nepoch_cnt == (target_num_epochs-1) else do_save_ckpt
 
             start_time = time.time()
 
