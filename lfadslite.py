@@ -1052,8 +1052,8 @@ class LFADS(object):
             self.lve = valid_set_heldin_samp_cost
         else:
             self.lve = np.inf
-        self.trial_recon_cost = valid_set_heldin_samp_cost
-        self.samp_recon_cost = valid_set_heldout_samp_cost
+        #self.trial_recon_cost = valid_set_heldin_samp_cost
+        #self.samp_recon_cost = train_set_heldout_samp_cost
 
         coef = 0.7 # smoothing coefficient for valid cost - lower values mean more smoothing
 
@@ -1134,13 +1134,20 @@ class LFADS(object):
 
             # initialize the running average
             if nepoch_cnt == 0:
-                smth_heldin_val_recn_cost = valid_set_heldin_samp_cost
-                smth_heldout_val_recn_cost = train_set_heldout_samp_cost
+                smth_train_set_heldin_samp_cost = train_set_heldin_samp_cost
+                smth_train_set_heldout_samp_cost = train_set_heldout_samp_cost
+                smth_valid_set_heldin_samp_cost = valid_set_heldin_samp_cost
+                smth_valid_set_heldout_samp_cost = valid_set_heldout_samp_cost
 
-            # recon cost over validation trials
-            smth_heldin_val_recn_cost = (1. - coef) * smth_heldin_val_recn_cost + coef * valid_set_heldin_samp_cost
+
+            # recon cost over training trials
+            smth_train_set_heldin_samp_cost = (1. - coef) * smth_train_set_heldin_samp_cost + coef * train_set_heldin_samp_cost
             # recon cost over dropped samples
-            smth_heldout_val_recn_cost = (1. - coef) * smth_heldout_val_recn_cost + coef * train_set_heldout_samp_cost
+            smth_train_set_heldout_samp_cost = (1. - coef) * smth_train_set_heldout_samp_cost + coef * train_set_heldout_samp_cost
+            # recon cost over validation trials
+            smth_valid_set_heldin_samp_cost = (1. - coef) * smth_valid_set_heldin_samp_cost + coef * valid_set_heldin_samp_cost
+            # recon cost over dropped samples
+            smth_valid_set_heldout_samp_cost = (1. - coef) * smth_valid_set_heldout_samp_cost + coef * valid_set_heldout_samp_cost
 
             train_step = session.run(self.train_step)
             if np.isnan(all_train_R2_heldin):
@@ -1156,22 +1163,22 @@ class LFADS(object):
                        tr_kl_cost, val_kl_cost, l2_cost, kl_weight, l2_weight,
                        all_train_R2_heldin, all_train_R2_heldout, all_valid_R2_heldin, all_valid_R2_heldout,))
 
-            is_lve = smth_heldin_val_recn_cost < self.lve and (kl_weight == 1. and l2_weight == 1.)
+            is_lve = smth_valid_set_heldin_samp_cost < self.lve and (kl_weight == 1. and l2_weight == 1.)
 
             # Making parameters available for lfads_wrappper
             if hps['checkpoint_pb_load_name'] == 'checkpoint_lve':
                 # if we are returning lve costs
                 if is_lve:
-                    self.trial_recon_cost = smth_heldin_val_recn_cost
-                    self.samp_recon_cost = smth_heldout_val_recn_cost
+                    self.trial_recon_cost = smth_valid_set_heldin_samp_cost
+                    self.samp_recon_cost = smth_train_set_heldout_samp_cost
             else:
-                self.trial_recon_cost = smth_heldin_val_recn_cost
-                self.samp_recon_cost = smth_heldout_val_recn_cost
+                self.trial_recon_cost = smth_valid_set_heldin_samp_cost
+                self.samp_recon_cost = smth_train_set_heldout_samp_cost
 
             # MRK, moved this here to get the right for the checkpoint train_step
             if is_lve:
                 # new lowest validation error
-                self.lve = smth_heldin_val_recn_cost
+                self.lve = smth_valid_set_heldin_samp_cost
                 lve_epoch = nepoch
                 checkpoint_path = os.path.join(self.hps.lfads_save_dir,
                                                self.hps.checkpoint_name + '_lve.ckpt')
@@ -1189,13 +1196,30 @@ class LFADS(object):
                 recon,%.6E,%.6E,%.6E,%.6E, R^2 (Held-in, Held-out), %.6E, %.6E, %.6E, %.6E," \
                              "kl,%.6E,%.6E, l2,%.6E, klweight,%.6E, l2weight,%.6E, lr,%.6E\n"% \
                 (nepoch, train_step, tr_total_cost, val_total_cost,
-                 train_set_heldin_samp_cost, train_set_heldout_samp_cost, valid_set_heldin_samp_cost, valid_set_heldout_samp_cost,
+                 train_set_heldin_samp_cost, train_set_heldout_samp_cost,
+                 valid_set_heldin_samp_cost, valid_set_heldout_samp_cost,
                  all_train_R2_heldin, all_train_R2_heldout, all_valid_R2_heldin, all_valid_R2_heldout,
                  tr_kl_cost, val_kl_cost, l2_cost, kl_weight, l2_weight, new_lr)
                 # log to file
                 csv_file = os.path.join(self.hps.lfads_save_dir, self.hps.csv_log+'.csv')
                 with open(csv_file, "a") as myfile:
                     myfile.write(csv_outstr)
+                
+                # write smoothed costs
+                # construct an output string
+                csv_outstr = "epoch,%d, step,%d, total,%.6E,%.6E, \
+                recon,%.6E,%.6E,%.6E,%.6E, R^2 (Held-in, Held-out), %.6E, %.6E, %.6E, %.6E," \
+                             "kl,%.6E,%.6E, l2,%.6E, klweight,%.6E, l2weight,%.6E, lr,%.6E\n"% \
+                (nepoch, train_step, tr_total_cost, val_total_cost,
+                 smth_train_set_heldin_samp_cost, smth_train_set_heldout_samp_cost,
+                 smth_valid_set_heldin_samp_cost, smth_valid_set_heldout_samp_cost,
+                 all_train_R2_heldin, all_train_R2_heldout, all_valid_R2_heldin, all_valid_R2_heldout,
+                 tr_kl_cost, val_kl_cost, l2_cost, kl_weight, l2_weight, new_lr)
+                # log to file
+                csv_file = os.path.join(self.hps.lfads_save_dir, self.hps.csv_log+'_smoothed.csv')
+                with open(csv_file, "a") as myfile:
+                    myfile.write(csv_outstr)
+
 
             # save gradients norms to a file (used for testing)
             csv_file = os.path.join(self.hps.lfads_save_dir, 'gradnorms.csv')
