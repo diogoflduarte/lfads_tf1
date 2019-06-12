@@ -1014,6 +1014,10 @@ class LFADS(object):
 
         hps = self.hps
 
+        # check if target_num_epochs has been specified
+        if hps['target_num_epochs'] > 0:
+            target_num_epochs = hps['target_num_epochs']
+
         # check to see if there are any validation datasets
         #has_any_valid_set = False
         #for data_dict in datasets.values():
