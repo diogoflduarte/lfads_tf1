@@ -869,10 +869,9 @@ class LFADS(object):
         nexamples, ntime, data_dim = data_dict[kind_data].shape
         epoch_idxs[name] = 0
         if kind == 'valid':
-            # pass one large batch for validation set
-            # random_example_idxs = [np.arange(nexamples)]
-            random_example_idxs = \
-                ListOfRandomBatches(nexamples, self.hps.valid_batch_size)
+            n = self.hps.valid_batch_size
+            l = range(nexamples)
+            random_example_idxs = [list(l[i:i+n]) for i in range(0, len(l), n)]
         else:
             random_example_idxs = \
                 ListOfRandomBatches(nexamples, batch_size)
@@ -949,12 +948,14 @@ class LFADS(object):
         session = tf.get_default_session()
 
         evald_ops = []
+        batch_len = []
         # iterate over all datasets
         for name, example_idxs in all_name_example_idx_pairs:
             data_dict = datasets[name]
             data_extxd = data_dict[kind_data]
             cv_rand_mask = data_dict[cv_mask_name]
             ext_input_bxtxi = data_dict[ext_input_kind]
+            batch_len.append(len(example_idxs))
 
             this_batch = data_extxd[example_idxs,:,:]
 
@@ -978,7 +979,7 @@ class LFADS(object):
                 tc, rc, rc_v, kl, l2, gn, _= evald_ops_this_batch
                 evald_ops_this_batch = (tc, rc, rc_v, kl, l2, gn)
             evald_ops.append(evald_ops_this_batch)
-        evald_ops = np.mean(evald_ops, axis=0)
+        evald_ops = np.average(evald_ops, axis=0, weights=batch_len) 
         return evald_ops
         
 
@@ -1309,7 +1310,7 @@ class LFADS(object):
         for idx in batches:
             ext_inputs = ext_input_bxtxi[idx] if ext_input_bxtxi is not None else None
             feed_dict = self.build_feed_dict(data_name, data_bxtxd[idx], cv_rand_mask=np.ones_like(data_bxtxd[idx]),
-        	    ext_input_bxtxi=ext_inputs, run_type=run_type,
+                ext_input_bxtxi=ext_inputs, run_type=run_type,
                                          keep_prob=1.0, keep_ratio=1.0)
             # flatten for sending into session.run
             np_vals_flat.append(session.run(tf_vals, feed_dict=feed_dict))
