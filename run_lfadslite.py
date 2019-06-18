@@ -382,7 +382,7 @@ flags.DEFINE_float("adam_beta1", ADAM_BETA1,
 flags.DEFINE_float("adam_beta2", ADAM_BETA2,
                    "Beta2 parameter of ADAM optimizer.")
 
-flags.DEFINE_boolean("do_calc_r2", True,
+flags.DEFINE_boolean("do_calc_r2", DO_CALC_R2,
                      "Calculate R^2 is the truth rates are available.")
 
 

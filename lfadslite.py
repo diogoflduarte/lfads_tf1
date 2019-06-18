@@ -111,6 +111,7 @@ class LFADS(object):
             #   enumerated in helper_funcs.kind_dict
             self.keep_prob = tf.placeholder(tf.float32, name='keep_prob')
             self.keep_ratio = tf.placeholder(tf.float32, name='keep_ratio')
+            self.cv_keep_ratio = tf.placeholder(tf.float32, name='cv_keep_ratio')
 
             self.run_type = tf.placeholder(tf.int32, name='run_type')
             self.kl_ic_weight = tf.placeholder(tf.float32, name='kl_ic_weight')
@@ -149,7 +150,6 @@ class LFADS(object):
         #allsets = hps['dataset_dims'].keys()
         #self.input_dim = hps['dataset_dims'][allsets[0]]
         
-        self.cv_keep_ratio = hps['cv_keep_ratio']
         self.cd_grad_passthru_prob = hps['cd_grad_passthru_prob']
 
         ## do per-session stuff
@@ -289,21 +289,35 @@ class LFADS(object):
         # replicate the cross-validation binary mask for this dataset for all elements of the batch
         # work around error in dynamic rnn when input dim is None
         # don't apply CV mask to ic_enc_segment
-        self.cv_rand_mask = self.cv_rand_mask_ph[:, hps.ic_enc_seg_len:, :]
-        self.cv_binary_mask_batch = self.cv_rand_mask * \
-                                    tf.expand_dims(tf.ones([graph_batch_size, 1]), 1) * \
-                                    this_dataset_dims[hps.ic_enc_seg_len:, :]
 
-        # MRK: apply cross-validation dropout
-        # change the cv dropout to randomly sample from empirical distribution
-        masked_dataset_in = masked_dataset_in * self.cv_binary_mask_batch + (1. -  self.cv_binary_mask_batch) * \
-                            tf.transpose(
-                                tf.random.shuffle(
+        # define the SV noise type
+        sv_mask_type = 'zeros'
+        if hps.cv_keep_ratio < 1.0:
+            self.cv_rand_mask = self.cv_rand_mask_ph[:, hps.ic_enc_seg_len:, :]
+            self.cv_binary_mask_batch = self.cv_rand_mask * \
+                                        tf.expand_dims(tf.ones([graph_batch_size, 1]), 1) * \
+                                        this_dataset_dims[hps.ic_enc_seg_len:, :]
+
+            # MRK: apply cross-validation dropout
+            if sv_mask_type == 'zeros':
+                masked_dataset_in = tf.div(masked_dataset_in, self.cv_keep_ratio) * self.cv_binary_mask_batch
+
+            elif sv_mask_type == 'shuffle':
+                # change the cv dropout to randomly sample from empirical distribution
+                masked_dataset_in = masked_dataset_in * self.cv_binary_mask_batch + (1. -  self.cv_binary_mask_batch) * \
                                     tf.transpose(
-                                        tf.random.shuffle(self.dataset_in), [1, 0, 2]
-                                    )
-                                ),
-                                [1, 0, 2])
+                                        tf.random.shuffle(
+                                            tf.transpose(
+                                                tf.random.shuffle(self.dataset_in), [1, 0, 2]
+                                            )
+                                        ),
+                                        [1, 0, 2])
+            else:
+                self.cv_rand_mask = tf.ones_like(self.cv_rand_mask_ph[:, hps.ic_enc_seg_len:, :])
+                self.cv_binary_mask_batch = self.cv_rand_mask * \
+                                            tf.expand_dims(tf.ones([graph_batch_size, 1]), 1) * \
+                                            this_dataset_dims[hps.ic_enc_seg_len:, :]
+
 
         # MRK: if hps.ic_enc_seg_len is 0, switch to non-causal mode
         if hps.ic_enc_seg_len > 0:
@@ -314,13 +328,6 @@ class LFADS(object):
             seq_len = hps.num_steps
             ic_enc_seg_len = 0
             self.input_to_ci_encoder = masked_dataset_in
-
-        #masked_dataset_in = tf.div(masked_dataset_in, self.cv_keep_ratio) * self.cv_binary_mask_batch
-
-        # add noise insteaad of zeroing the held-out samples
-        #masked_noise = (1. - self.cv_binary_mask_batch) * tf.transpose(
-        #    tf.random_shuffle(tf.transpose(tf.random_shuffle(self.dataset_in), perm=[1,0,2])),
-        #    perm=[1,0,2])
 
         # define input to encoders
         if hps.in_factors_dim > 0:
@@ -674,7 +681,7 @@ class LFADS(object):
                               tf.reduce_mean(self.loglikelihood_b_t * self.cv_binary_mask_batch)
 
         # cost for held-out samples
-        if self.cv_keep_ratio != 1.0:
+        if hps.cv_keep_ratio < 1.0:
             self.rec_cost_heldout = - (1. / (1. - self.cv_keep_ratio)) * \
                                   tf.reduce_mean(self.loglikelihood_b_t * (1. - self.cv_binary_mask_batch))
         else:
@@ -779,7 +786,7 @@ class LFADS(object):
     ## functions to interface with the outside world
     def build_feed_dict(self, train_name, data_bxtxd, cv_rand_mask=None, ext_input_bxtxi=None, run_type=None,
                         keep_prob=None, kl_ic_weight=1.0, kl_co_weight=1.0,
-                        keep_ratio=None, kl_weight=1.0, l2_weight=1.0):
+                        keep_ratio=None, cv_keep_ratio=None, kl_weight=1.0, l2_weight=1.0):
       """Build the feed dictionary, handles cases where there is no value defined.
 
       Args:
@@ -823,7 +830,7 @@ class LFADS(object):
         feed_dict[self.run_type] = self.hps.kind
       else:
         feed_dict[self.run_type] = run_type
-          
+
       if keep_prob is None:
         feed_dict[self.keep_prob] = self.hps.keep_prob
       else:
@@ -833,6 +840,11 @@ class LFADS(object):
         feed_dict[self.keep_ratio] = self.hps.keep_ratio
       else:
         feed_dict[self.keep_ratio] = keep_ratio
+
+      if cv_keep_ratio is None:
+        feed_dict[self.cv_keep_ratio] = self.hps.cv_keep_ratio
+      else:
+        feed_dict[self.cv_keep_ratio] = cv_keep_ratio
 
       return feed_dict
 
@@ -980,6 +992,7 @@ class LFADS(object):
                 evald_ops_this_batch = (tc, rc, rc_v, kl, l2, gn)
             evald_ops.append(evald_ops_this_batch)
         evald_ops = np.average(evald_ops, axis=0, weights=batch_len) 
+        print(batch_len)
         return evald_ops
         
 
@@ -1065,7 +1078,7 @@ class LFADS(object):
         # calculate R^2 if true data is available
         name = datasets.keys()[0]
         data_dict = datasets[name]
-        do_r2_calc = data_dict['train_truth'] is not None and hps['do_calc_r2']
+        do_r2_calc = (data_dict['train_truth'] is not None) and hps['do_calc_r2']
 
         lr = self.get_learning_rate()
         self.printlog('Starting learning rate: ', lr)
@@ -1311,7 +1324,7 @@ class LFADS(object):
             ext_inputs = ext_input_bxtxi[idx] if ext_input_bxtxi is not None else None
             feed_dict = self.build_feed_dict(data_name, data_bxtxd[idx], cv_rand_mask=np.ones_like(data_bxtxd[idx]),
                 ext_input_bxtxi=ext_inputs, run_type=run_type,
-                                         keep_prob=1.0, keep_ratio=1.0)
+                                         keep_prob=1.0, keep_ratio=1.0, cv_keep_ratio=1.0)
             # flatten for sending into session.run
             np_vals_flat.append(session.run(tf_vals, feed_dict=feed_dict))
         # concatenate all the batches
