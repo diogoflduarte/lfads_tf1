@@ -301,6 +301,7 @@ class LFADS(object):
             # MRK: apply cross-validation dropout
             if sv_mask_type == 'zeros':
                 masked_dataset_in = tf.div(masked_dataset_in, self.cv_keep_ratio) * self.cv_binary_mask_batch
+                masked_dataset_in.set_shape(self.cv_binary_mask_batch.get_shape())
 
             elif sv_mask_type == 'shuffle':
                 # change the cv dropout to randomly sample from empirical distribution
