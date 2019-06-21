@@ -313,11 +313,11 @@ class LFADS(object):
                                             )
                                         ),
                                         [1, 0, 2])
-            else:
-                self.cv_rand_mask = tf.ones_like(self.cv_rand_mask_ph[:, hps.ic_enc_seg_len:, :])
-                self.cv_binary_mask_batch = self.cv_rand_mask * \
-                                            tf.expand_dims(tf.ones([graph_batch_size, 1]), 1) * \
-                                            this_dataset_dims[hps.ic_enc_seg_len:, :]
+        else:
+            self.cv_rand_mask = tf.ones_like(self.cv_rand_mask_ph[:, hps.ic_enc_seg_len:, :])
+            self.cv_binary_mask_batch = self.cv_rand_mask * \
+                                        tf.expand_dims(tf.ones([graph_batch_size, 1]), 1) * \
+                                        this_dataset_dims[hps.ic_enc_seg_len:, :]
 
 
         # MRK: if hps.ic_enc_seg_len is 0, switch to non-causal mode
