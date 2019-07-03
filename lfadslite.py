@@ -18,7 +18,7 @@ from helper_funcs import DiagonalGaussianFromExisting, LearnableDiagonalGaussian
 from helper_funcs import LinearTimeVarying
 from helper_funcs import KLCost_GaussianGaussian, KLCost_GaussianGaussianProcessSampled
 from data_funcs import write_data
-from helper_funcs import printer, mkdir_p
+from helper_funcs import printer, mkdir_p, write_code_commit
 #from plot_funcs import plot_data, close_all_plots
 #from data_funcs import read_datasets
 from customcells import ComplexCell
@@ -72,7 +72,6 @@ class LFADS(object):
         #CELL_TYPE = 'lstm' # not working
         #CELL_TYPE = 'gru'
         CELL_TYPE = 'customgru'
-        print('This is a REDUCE_MEAN lfadslite.')
 
         # to stop certain gradients paths through the graph in backprop
         def entry_stop_gradients(target, mask):
@@ -81,6 +80,13 @@ class LFADS(object):
 
         # save the stdout to a log file and prints it on the screen
         mkdir_p(hps['lfads_save_dir'])
+        latest_commit = write_code_commit(hps.lfads_save_dir)
+        print('==================== Code Version: ')
+        print('This is a REDUCE_MEAN lfadslite. Commit:')
+        print(latest_commit)
+        print('================================== ')
+
+
         #sys.stdout = Logger(os.path.join(hps['lfads_save_dir'], "lfads_output.log"))
         logger = Logger(os.path.join(hps['lfads_save_dir'], "lfads_output.log"))
         self.printlog = logger.printlog

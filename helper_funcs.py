@@ -8,6 +8,7 @@ import os
 import sys
 import warnings
 import errno
+import subprocess
 
 def kind_dict_definition():
     # used in the graph's keep probability
@@ -43,6 +44,14 @@ def mkdir_p(path):
         else:
             raise
 
+def write_code_commit(path):
+    code_path = os.path.dirname(os.path.abspath(__file__))
+    latest_commit = subprocess.check_output(["git", "--git-dir=%s/.git" % code_path,
+                                             "--work-tree=%s" % code_path,
+                                             "show", "--name-status"]).strip()
+    with open(os.path.join(path, 'code_version.txt'), 'w') as f:
+        f.write(latest_commit)
+    return latest_commit
 
 def printer(data):
     # prints on the same line
