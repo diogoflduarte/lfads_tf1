@@ -91,7 +91,7 @@ def init_linear_transform(in_size, out_size, name=None, collections=None, mat_in
             vshape = [1, out_size]
         else:
             b_init = tf.constant_initializer(bias_init_value)
-            vshape = None
+            vshape = [1, out_size]
         b = tf.get_variable(bname, vshape,
                             initializer=b_init,
                             dtype=tf.float32)
