@@ -1035,6 +1035,10 @@ class LFADS(object):
 
         hps = self.hps
 
+        if hps.do_reset_learning_rate:
+            print('Learning rate has been reset to {}'.format(hps.learning_rate_init))
+            session.run(self.learning_rate.initializer)
+
         # check if target_num_epochs has been specified
         if 'target_num_epochs' in hps and hps['target_num_epochs'] > 0:
             target_num_epochs = hps['target_num_epochs']

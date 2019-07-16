@@ -605,10 +605,6 @@ def train(hps, datasets):
       name(string)-> data dictionary mapping (See top of lfads.py).
   """
   model = build_model(hps, datasets=datasets)
-  if hps.do_reset_learning_rate:
-    sess = tf.get_default_session()
-    sess.run(model.learning_rate.initializer)
-
   model.train_model(datasets)
 
 
