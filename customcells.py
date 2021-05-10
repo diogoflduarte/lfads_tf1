@@ -1,4 +1,5 @@
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 from tensorflow.python.ops.rnn_cell_impl import LayerRNNCell
 from lfads_tf1.helper_funcs import linear, kind_dict
 from lfads_tf1.helper_funcs import DiagonalGaussianFromExisting

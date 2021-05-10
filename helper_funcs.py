@@ -3,7 +3,8 @@ from __future__ import division
 from __future__ import print_function
 
 import numpy as np
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 import os
 import sys
 import warnings
@@ -73,11 +74,11 @@ def init_linear_transform(in_size, out_size, name=None, collections=None, mat_in
         vshape = [in_size, out_size]
 
     # weight matrix
-    w_collections = [tf.compat.v1.GraphKeys.GLOBAL_VARIABLES, "norm-variables"]
+    w_collections = [tf.GraphKeys.GLOBAL_VARIABLES, "norm-variables"]
     if collections:
         w_collections += collections
     wname = (name + "/W") if name else "/W"
-    w = tf.compat.v1.get_variable(wname, vshape, initializer=mat_init,
+    w = tf.get_variable(wname, vshape, initializer=mat_init,
                         dtype=tf.float32, collections=w_collections)
     if normalized:
         w = tf.nn.l2_normalize(w, axis=0)
@@ -92,7 +93,7 @@ def init_linear_transform(in_size, out_size, name=None, collections=None, mat_in
         else:
             b_init = tf.constant_initializer(bias_init_value)
             vshape = [1, out_size]
-        b = tf.compat.v1.get_variable(bname, vshape,
+        b = tf.get_variable(bname, vshape,
                             initializer=b_init,
                             dtype=tf.float32)
     else:
@@ -248,14 +249,14 @@ class LearnableDiagonalGaussian(Gaussian):
         mean_init = 0.0
         num_steps = z_size[0]
         num_dim = z_size[1]
-        z_mean_1xn = tf.compat.v1.get_variable(name=name+"/mean", shape=[1,1,num_dim],
+        z_mean_1xn = tf.get_variable(name=name+"/mean", shape=[1,1,num_dim],
                              initializer=tf.constant_initializer(mean_init), trainable=trainable_mean)
         self.mean_bxn = tf.tile(z_mean_1xn, tf.stack([batch_size, num_steps, 1] ))
         self.mean_bxn.set_shape([None] + z_size)
 
         # MRK, make Var trainable (for Controller prior)
         var_init = np.log(var)
-        z_logvar_1xn = tf.compat.v1.get_variable(name=name+"/logvar", shape=[1,1,num_dim],
+        z_logvar_1xn = tf.get_variable(name=name+"/logvar", shape=[1,1,num_dim],
                                        initializer=tf.constant_initializer(var_init),
                                        trainable=trainable_var)
         self.logvar_bxn = tf.tile(z_logvar_1xn, tf.stack([batch_size, num_steps, 1]))
@@ -397,7 +398,7 @@ class LearnableAutoRegressive1Prior(object):
 def makeInitialState(state_dim, batch_size, name):
     #init_stddev = 1 / np.sqrt(float(state_dim))
     #init_initter = tf.random_normal_initializer(0.0, init_stddev, dtype=tf.float32)
-    init_state = tf.compat.v1.get_variable(name + '_init_state', [1, state_dim],
+    init_state = tf.get_variable(name + '_init_state', [1, state_dim],
                                  #initializer=init_initter,
                                  initializer=tf.zeros_initializer(),
                                  dtype=tf.float32, trainable=True)
@@ -679,7 +680,8 @@ def dropout(x, keep_prob, noise_shape=None, seed=None, name=None,
                                           dtype=x.dtype,
                                           name="keep_prob")
 
-        keep_prob.get_shape().assert_is_compatible_with(tensor_shape.scalar())
+        #keep_prob.get_shape().assert_is_compatible_with(tensor_shape.scalar())
+        keep_prob.get_shape().assert_is_compatible_with(tf.TensorShape([]))
 
         if binary_tensor is None:
             # Do nothing if we know keep_prob == 1
@@ -699,7 +701,8 @@ def dropout(x, keep_prob, noise_shape=None, seed=None, name=None,
             binary_tensor = math_ops.cast(binary_tensor, dtype=x.dtype)
             # pass
 
-        ret = math_ops.div(x, keep_prob) * binary_tensor
+        #ret = math_ops.div(x, keep_prob) * binary_tensor
+        ret = tf.math.divide(x, keep_prob) * binary_tensor
         # if context.in_graph_mode():
         ret.set_shape(x.get_shape())
         return ret, binary_tensor

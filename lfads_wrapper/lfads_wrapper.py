@@ -16,7 +16,8 @@ import warnings
 
 allow_gpu_growth = True
 
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 
 class lfadsWrapper:
     def __init__(self):
@@ -248,7 +249,7 @@ class lfadsWrapper:
         #return model.lve  # for lve cost
 
     def build_model(self, hps, datasets=None, reuse=None ):
-        with tf.compat.v1.variable_scope("LFADS", reuse=reuse):
+        with tf.variable_scope("LFADS", reuse=reuse):
             model = LFADS(hps, datasets=datasets)
 
         if not os.path.exists(hps.lfads_save_dir):
