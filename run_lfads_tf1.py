@@ -106,6 +106,8 @@ ADAM_BETA2 = 0.999
 DO_CALC_R2 = False
 
 flags = tf.app.flags
+
+flags.DEFINE_string('f', '', 'kernel') # for use in jupyter notebooks/Colab
 flags.DEFINE_string("kind", "train",
                     "Type of model to build {train, \
                     posterior_sample_and_average, posterior_mean, \
