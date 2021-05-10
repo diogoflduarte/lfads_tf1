@@ -235,6 +235,8 @@ class lfadsWrapper:
         hps.num_steps = list(self.datasets.values())[0]['num_steps']
         hps.ndatasets = len(hps.dataset_names)
 
+        return hps
+
     def _train(self, hps, datasets, num_steps):
         model = self.build_model(hps, datasets=datasets)
         if hps.do_reset_learning_rate:

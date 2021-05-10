@@ -107,29 +107,29 @@ class LFADS(object):
         #  if not multiple datasets and no input_factors_dim is defined, we'll hook data straight to encoders
 
         # define all placeholders
-        with tf.variable_scope('placeholders'):
+        with tf.compat.v1.variable_scope('placeholders'):
             # input data (what are we training on)
             # we're going to try setting input dimensionality to None
             #  so datasets with different sizes can be used
-            self.dataset_ph = tf.placeholder(tf.float32, shape = [None, hps['num_steps'], None], name='input_data')
-            self.cv_rand_mask_ph = tf.placeholder(tf.float32, shape=[None, hps['num_steps'], None], name='cv_rand_mask')
+            self.dataset_ph = tf.compat.v1.placeholder(tf.float32, shape = [None, hps['num_steps'], None], name='input_data')
+            self.cv_rand_mask_ph = tf.compat.v1.placeholder(tf.float32, shape=[None, hps['num_steps'], None], name='cv_rand_mask')
             # dropout keep probability
             #   enumerated in helper_funcs.kind_dict
-            self.keep_prob = tf.placeholder(tf.float32, name='keep_prob')
-            self.keep_ratio = tf.placeholder(tf.float32, name='keep_ratio')
-            self.cv_keep_ratio = tf.placeholder(tf.float32, name='cv_keep_ratio')
+            self.keep_prob = tf.compat.v1.placeholder(tf.float32, name='keep_prob')
+            self.keep_ratio = tf.compat.v1.placeholder(tf.float32, name='keep_ratio')
+            self.cv_keep_ratio = tf.compat.v1.placeholder(tf.float32, name='cv_keep_ratio')
 
-            self.run_type = tf.placeholder(tf.int32, name='run_type')
-            self.kl_ic_weight = tf.placeholder(tf.float32, name='kl_ic_weight')
-            self.kl_co_weight = tf.placeholder(tf.float32, name='kl_co_weight')
+            self.run_type = tf.compat.v1.placeholder(tf.int32, name='run_type')
+            self.kl_ic_weight = tf.compat.v1.placeholder(tf.float32, name='kl_ic_weight')
+            self.kl_co_weight = tf.compat.v1.placeholder(tf.float32, name='kl_co_weight')
             # ramp KL and L2 cost weights
-            self.kl_weight = tf.placeholder(tf.float32, name='kl_weight')
-            self.l2_weight = tf.placeholder(tf.float32, name='l2_weight')
+            self.kl_weight = tf.compat.v1.placeholder(tf.float32, name='kl_weight')
+            self.l2_weight = tf.compat.v1.placeholder(tf.float32, name='l2_weight')
 
             # name of the dataset
-            self.dataName = tf.placeholder(tf.string, shape=(), name='dataset_name')
+            self.dataName = tf.compat.v1.placeholder(tf.string, shape=(), name='dataset_name')
             if hps['ext_input_dim'] > 0:
-                self.ext_input_ph = tf.placeholder(tf.float32,
+                self.ext_input_ph = tf.compat.v1.placeholder(tf.float32,
                                       [None, hps['num_steps'], hps['ext_input_dim']],
                                       name="ext_input")
                 self.ext_input = self.ext_input_ph[:, hps.ic_enc_seg_len:, :]
