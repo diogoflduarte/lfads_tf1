@@ -1,7 +1,7 @@
 import tensorflow as tf
 from tensorflow.python.ops.rnn_cell_impl import LayerRNNCell
-from helper_funcs import linear, kind_dict
-from helper_funcs import DiagonalGaussianFromExisting
+from lfads_tf1.helper_funcs import linear, kind_dict
+from lfads_tf1.helper_funcs import DiagonalGaussianFromExisting
 import numpy as np
 
 from tensorflow.python.layers import base as base_layer
