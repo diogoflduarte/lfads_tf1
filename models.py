@@ -82,10 +82,10 @@ class LFADS(object):
         # save the stdout to a log file and prints it on the screen
         mkdir_p(hps['lfads_save_dir'])
         latest_commit = write_code_commit(hps.lfads_save_dir)
-        print('==================== Code Version: ')
-        print('This is a REDUCE_MEAN lfadslite. Commit:')
+        print('Code Version ========================== ')
+        print('This is an lfads_tf1 model. \nCommit:')
         print(latest_commit)
-        print('================================== ')
+        print('======================================= ')
 
 
         #sys.stdout = Logger(os.path.join(hps['lfads_save_dir'], "lfads_output.log"))
