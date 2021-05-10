@@ -232,7 +232,7 @@ class lfadsWrapper:
 
         # also store down the dimensionality of the data
         # - just pull from one set, required to be same for all sets
-        hps.num_steps = self.datasets.values()[0]['num_steps']
+        hps.num_steps = list(self.datasets.values())[0]['num_steps']
         hps.ndatasets = len(hps.dataset_names)
 
     def _train(self, hps, datasets, num_steps):
