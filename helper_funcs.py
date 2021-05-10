@@ -50,7 +50,7 @@ def write_code_commit(path):
                                              "--work-tree=%s" % code_path,
                                              "show", "--name-status"]).strip()
     with open(os.path.join(path, 'code_version.txt'), 'w') as f:
-        f.write(latest_commit)
+        f.write(str(latest_commit))
     return latest_commit
 
 def printer(data):

@@ -246,7 +246,7 @@ class lfadsWrapper:
         #return model.lve  # for lve cost
 
     def build_model(self, hps, datasets=None, reuse=None ):
-        with tf.variable_scope("LFADS", reuse=reuse):
+        with tf.compat.v1.variable_scope("LFADS", reuse=reuse):
             model = LFADS(hps, datasets=datasets)
 
         if not os.path.exists(hps.lfads_save_dir):
