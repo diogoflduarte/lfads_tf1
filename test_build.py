@@ -5,10 +5,10 @@ import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 # suppress tf1 deprecation warnings
 tf.logging.set_verbosity(tf.logging.ERROR)
-from models import LFADS
-from run_lfads_tf1 import FLAGS, build_hyperparameter_dict, hps_dict_to_obj, kind_dict
-from lfads_wrapper.lfads_wrapper import lfadsWrapper
-from data_funcs import load_datasets
+from lfads_tf1.models import LFADS
+from lfads_tf1.run_lfads_tf1 import FLAGS, build_hyperparameter_dict, hps_dict_to_obj, kind_dict
+from lfads_tf1.lfads_wrapper.lfads_wrapper import lfadsWrapper
+from lfads_tf1.data_funcs import load_datasets
 
 data_dir = '/snel/home/lwimala/tmp/21_simons_workshop/lfads_input/'
 model_dir = '/snel/home/lwimala/tmp/21_simons_workshop/lfads_output/'
@@ -78,6 +78,7 @@ try:
                 hps,
                 datasets=lfads.datasets,
                 reuse=tf.AUTO_REUSE)
+            model.train_model(lfads.datasets)
 except Exception:
     sess.close()
     tf.reset_default_graph()
