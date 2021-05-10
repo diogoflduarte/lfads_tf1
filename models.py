@@ -484,6 +484,7 @@ class LFADS(object):
 
             used_con_dim = hps['con_dim']
         else:
+            print('Controller is NOT used.')
             # in co_dim == 0 case:
             # dummy inputs to dynamic rnn, not used for anything
             self.ci_enc_outputs = tf.zeros([graph_batch_size, seq_len, 0])
