@@ -151,7 +151,7 @@ class LFADS(object):
         #dataset_dims = [None] * ndatasets
         fns_this_dataset_dims = [None] * ndatasets
 
-        
+
         # figure out the input (dataset) dimensionality
         #allsets = hps['dataset_dims'].keys()
         #self.input_dim = hps['dataset_dims'][allsets[0]]
@@ -249,17 +249,18 @@ class LFADS(object):
             fns_out_fac_bs[d] = makelambda(out_fac_b)
 
         # now 'zip' together the 'pred' selector with all the function handles
-        pf_pairs_in_fac_Ws = zip(preds, fns_in_fac_Ws)
-        pf_pairs_in_fac_bs = zip(preds, fns_in_fac_bs)
-        pf_pairs_out_fac_Ws = zip(preds, fns_out_fac_Ws)
-        pf_pairs_out_fac_bs = zip(preds, fns_out_fac_bs)
-        pf_pairs_this_dataset_dims = zip(preds, fns_this_dataset_dims )
+
+        pf_pairs_in_fac_Ws = tuple(zip(preds, fns_in_fac_Ws))
+        pf_pairs_in_fac_bs = tuple(zip(preds, fns_in_fac_bs))
+        pf_pairs_out_fac_Ws = tuple(zip(preds, fns_out_fac_Ws))
+        pf_pairs_out_fac_bs = tuple(zip(preds, fns_out_fac_bs))
+        pf_pairs_this_dataset_dims = tuple(zip(preds, fns_this_dataset_dims ))
 
         # now, choose the ones for this session
         if hps.in_factors_dim > 0:
             this_dataset_in_fac_W = _case_with_no_default( pf_pairs_in_fac_Ws )
             this_dataset_in_fac_b = _case_with_no_default( pf_pairs_in_fac_bs )
-            
+
         this_dataset_out_fac_W = _case_with_no_default( pf_pairs_out_fac_Ws )
         this_dataset_out_fac_b = _case_with_no_default( pf_pairs_out_fac_bs )
         this_dataset_dims = _case_with_no_default( pf_pairs_this_dataset_dims )
