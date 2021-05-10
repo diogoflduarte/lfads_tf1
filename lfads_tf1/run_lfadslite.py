@@ -2,15 +2,16 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from lfadslite import LFADS
+
 import numpy as np
 import os
 import tensorflow as tf
 import re
-import data_funcs as utils
+from lfads_tf1.models import LFADS
+import lfads_tf1.data_funcs as utils
 
 #lfadslite
-from helper_funcs import kind_dict, kind_dict_key
+from lfads_tf1.helper_funcs import kind_dict, kind_dict_key
 
 
 ## need to implement:

@@ -11,19 +11,19 @@ import re
 
 
 # utils defined by CP/MRK
-from helper_funcs import linear, init_linear_transform, makeInitialState
-from helper_funcs import ListOfRandomBatches, kind_dict, kind_dict_key
-from helper_funcs import LearnableAutoRegressive1Prior
-from helper_funcs import DiagonalGaussianFromExisting, LearnableDiagonalGaussian, diag_gaussian_log_likelihood
-from helper_funcs import LinearTimeVarying
-from helper_funcs import KLCost_GaussianGaussian, KLCost_GaussianGaussianProcessSampled
-from data_funcs import write_data
-from helper_funcs import printer, mkdir_p, write_code_commit
+from lfads_tf1.helper_funcs import linear, init_linear_transform, makeInitialState
+from lfads_tf1.helper_funcs import ListOfRandomBatches, kind_dict, kind_dict_key
+from lfads_tf1.helper_funcs import LearnableAutoRegressive1Prior
+from lfads_tf1.helper_funcs import DiagonalGaussianFromExisting, LearnableDiagonalGaussian, diag_gaussian_log_likelihood
+from lfads_tf1.helper_funcs import LinearTimeVarying
+from lfads_tf1.helper_funcs import KLCost_GaussianGaussian, KLCost_GaussianGaussianProcessSampled
+from lfads_tf1.data_funcs import write_data
+from lfads_tf1.helper_funcs import printer, mkdir_p, write_code_commit
 #from plot_funcs import plot_data, close_all_plots
 #from data_funcs import read_datasets
-from customcells import ComplexCell
-from rnn_helper_funcs import BidirectionalDynamicRNN #, DynamicRNN
-from helper_funcs import dropout
+from lfads_tf1.customcells import ComplexCell
+from lfads_tf1.rnn_helper_funcs import BidirectionalDynamicRNN #, DynamicRNN
+from lfads_tf1.helper_funcs import dropout
 
 
 # this will be used to store matrices/vectors for use in tf.case statements

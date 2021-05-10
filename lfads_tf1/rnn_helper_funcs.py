@@ -3,7 +3,7 @@ from __future__ import division
 from __future__ import print_function
 import numpy as np
 import tensorflow as tf
-from customcells import GRUCell
+from lfads_tf1.customcells import GRUCell
 
 
 class BidirectionalDynamicRNN(object):
