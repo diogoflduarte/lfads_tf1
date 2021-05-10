@@ -1090,7 +1090,7 @@ class LFADS(object):
         coef = 0.7 # smoothing coefficient for valid cost - lower values mean more smoothing
 
         # calculate R^2 if true data is available
-        name = datasets.keys()[0]
+        name = list(datasets.keys())[0]
         data_dict = datasets[name]
         do_r2_calc = (data_dict['train_truth'] is not None) and hps['do_calc_r2']
 
