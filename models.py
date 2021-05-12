@@ -1332,7 +1332,8 @@ class LFADS(object):
         # MRK, run Posterior sampling on batches
         l = list(range(data_bxtxd.shape[0]))
         b = self.hps.valid_batch_size
-        batches = [l[i:i + b] for i in xrange(0, len(l), b)]
+        #batches = [l[i:i + b] for i in xrange(0, len(l), b)]
+        batches = [l[i:i + b] for i in range(0, len(l), b)]
         np_vals_flat = []
         for idx in batches:
             ext_inputs = ext_input_bxtxi[idx] if ext_input_bxtxi is not None else None
@@ -1342,7 +1343,8 @@ class LFADS(object):
             # flatten for sending into session.run
             np_vals_flat.append(session.run(tf_vals, feed_dict=feed_dict))
         # concatenate all the batches
-        np_vals_flat = [np.concatenate([q[i] for q in np_vals_flat]) for i in xrange(len(np_vals_flat[0]))]
+        np_vals_flat = [np.concatenate([q[i] for q in np_vals_flat]) for i in range(len(np_vals_flat[0]))]
+        #np_vals_flat = [np.concatenate([q[i] for q in np_vals_flat]) for i in xrange(len(np_vals_flat[0]))]
         return np_vals_flat
     #        tf_vals_flat, fidxs = flatten(tf_vals)
             
