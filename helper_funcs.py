@@ -31,7 +31,7 @@ def kind_dict(kind_str):
 def kind_dict_key(kind_number):
     # get the key for a certain ind
     kd = kind_dict_definition()
-    for key, val in kd.iteritems():
+    for key, val in iter(kd.items()):
         if val == kind_number:
             return key
 
