@@ -10,7 +10,7 @@ from tensorflow.python.lib.io import file_io
 
 # convert json unicode to python string
 def convert(data):
-    if isinstance(data, basestring):
+    if isinstance(data, str):
         return str(data)
     elif isinstance(data, collections.Mapping):
         return dict(map(convert, data.iteritems()))
