@@ -128,9 +128,12 @@ def write_data(data_fname, data_dict, use_json=False, compression=None):
     os.makedirs(dir_name)
 
   if use_json:
-    the_file = open(data_fname,'w')
-    json.dump(data_dict, the_file)
-    the_file.close()
+    try:
+      the_file = open(data_fname,'w')
+      json.dump(data_dict, the_file)
+      the_file.close()
+    except PermissionError:
+      print('Permission denied. HPs will not be written')
   else:
     try:
       with h5py.File(data_fname, 'w') as hf:
@@ -144,6 +147,8 @@ def write_data(data_fname, data_dict, use_json=False, compression=None):
     except IOError:
       print("Cannot open %s for writing.", data_fname)
       raise
+    except PermissionError:
+      print('Permission denied. Posterior samples will not be written to file')
 
 
 def clean_data_dict(data_dict):
