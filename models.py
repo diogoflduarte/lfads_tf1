@@ -67,7 +67,8 @@ class Logger(object):
                 print(strtext, file=f)
                 print(strtext)
         except PermissionError:
-            print('Logger does not have access to append to file. Skipping writing to file')
+            pass
+            #print('Logger does not have access to append to file. Skipping writing to file')
 
 class LFADS(object):
 
