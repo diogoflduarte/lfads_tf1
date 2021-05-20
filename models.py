@@ -62,9 +62,12 @@ class Logger(object):
     def printlog(self, *args):
         strtext = (('{} ' * len(args)).format(*args))[:-1]
         #self.logfile.write(strtext)
-        with open(self.logfile, 'a') as f:
-            print(strtext, file=f)
-            print(strtext)
+        try:
+            with open(self.logfile, 'a') as f:
+                print(strtext, file=f)
+                print(strtext)
+        except PermissionError:
+            print('Logger does not have access to append to file. Skipping writing to file')
 
 class LFADS(object):
 
