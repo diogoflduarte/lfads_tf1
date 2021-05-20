@@ -1585,7 +1585,7 @@ class LFADS(object):
             model_runs = self.eval_model_runs_avg_epoch(data_name, data_extxd, ext_input_bxtxi)
             all_model_runs.append(model_runs)
             full_fname = os.path.join(hps.lfads_save_dir, fname)
-            write_data(full_fname, model_runs, compression='gzip')
+            #write_data(full_fname, model_runs, compression='gzip')
             self.printlog("Done.")
 
         return all_model_runs
