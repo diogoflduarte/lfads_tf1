@@ -149,7 +149,8 @@ def write_data(data_fname, data_dict, use_json=False, compression=None):
       raise
     except PermissionError:
       print('Permission denied. Posterior samples will not be written to file')
-
+    except OSError:
+      print('Permission denied. Posterior samples will not be written to file')
 
 def clean_data_dict(data_dict):
   """Add some key/value pairs to the data dict, if they are missing.
