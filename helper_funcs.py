@@ -50,8 +50,12 @@ def write_code_commit(path):
     latest_commit = subprocess.check_output(["git", "--git-dir=%s/.git" % code_path,
                                              "--work-tree=%s" % code_path,
                                              "show", "--name-status"]).strip()
-    with open(os.path.join(path, 'code_version.txt'), 'w') as f:
-        f.write(str(latest_commit))
+    try:
+        with open(os.path.join(path, 'code_version.txt'), 'w') as f:
+            f.write(str(latest_commit))
+    except PermissionError:
+        print('Permission denied. Code version will not be written to file.')
+     
     return latest_commit
 
 def printer(data):
