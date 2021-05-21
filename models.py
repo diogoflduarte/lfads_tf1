@@ -1576,7 +1576,7 @@ class LFADS(object):
         for data_name, data_dict in datasets.items():
           data_tuple = [('train', data_dict['train_data'], data_dict['train_ext_input']),
                         ('valid', data_dict['valid_data'], data_dict['valid_ext_input'])]
-          for i, data_kind, data_extxd, ext_input_bxtxi in enumerate(data_tuple):
+          for i, (data_kind, data_extxd, ext_input_bxtxi) in enumerate(data_tuple):
             if not output_fname:
               fname = "model_runs_" + data_name + '_' + data_kind + '_' + kind
             else:
