@@ -1604,7 +1604,7 @@ class LFADS(object):
           data_tuple = [('train', data_dict['train_data'], data_dict['train_ext_input']),
                         ('valid', data_dict['valid_data'], data_dict['valid_ext_input'])]
           for data_kind, data_extxd, ext_input_bxtxi in data_tuple:
-            model_runs = self.eval_model_runs_avg_epoch(data_name, data_extxd, ext_input_bxtxi
+            model_runs = self.eval_model_runs_avg_epoch(data_name, data_extxd, ext_input_bxtxi,
                                                         do_average_batch=do_average_batch,
                                                         pm_batch_size=n_samples)
             all_model_runs.append(model_runs)
