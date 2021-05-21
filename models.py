@@ -1570,27 +1570,47 @@ class LFADS(object):
         """
         hps = self.hps
         kind = kind_dict_key(hps.kind)
-        all_model_runs = []
-
+        #all_model_runs = []
+        all_model_runs = self.return_model_output(datasets)
+        
         for data_name, data_dict in datasets.items():
           data_tuple = [('train', data_dict['train_data'], data_dict['train_ext_input']),
                         ('valid', data_dict['valid_data'], data_dict['valid_ext_input'])]
-          for data_kind, data_extxd, ext_input_bxtxi in data_tuple:
+          for i, data_kind, data_extxd, ext_input_bxtxi in enumerate(data_tuple):
             if not output_fname:
               fname = "model_runs_" + data_name + '_' + data_kind + '_' + kind
             else:
               fname = output_fname + data_name + '_' + data_kind + '_' + kind
 
             self.printlog("Writing data for %s data and kind %s to file %s." % (data_name, data_kind, fname))
-            model_runs = self.eval_model_runs_avg_epoch(data_name, data_extxd, ext_input_bxtxi)
-            all_model_runs.append(model_runs)
             full_fname = os.path.join(hps.lfads_save_dir, fname)
-            #write_data(full_fname, model_runs, compression='gzip')
+            write_data(full_fname, all_model_runs[i], compression='gzip')
             self.printlog("Done.")
-
         return all_model_runs
 
+    def return_model_output(self, datasets, output_type='sample', n_samples=None):
+        
+        if output_type == 'sample':
+          do_average_batch = False
+        elif output_type == 'mean':
+          do_average_batch = True
+          n_samples = 1
+        else:
+          print('Model output not recognized. Using sample.')
+          do_average_batch = False
 
+        all_model_runs = []
+        for data_name, data_dict in datasets.items():
+          data_tuple = [('train', data_dict['train_data'], data_dict['train_ext_input']),
+                        ('valid', data_dict['valid_data'], data_dict['valid_ext_input'])]
+          for data_kind, data_extxd, ext_input_bxtxi in data_tuple:
+            model_runs = self.eval_model_runs_avg_epoch(data_name, data_extxd, ext_input_bxtxi
+                                                        do_average_batch=do_average_batch,
+                                                        pm_batch_size=n_samples)
+            all_model_runs.append(model_runs)
+
+        return all_model_runs
+        
     def eval_model_parameters(self, use_nested=True, include_strs=None):
         """Evaluate and return all of the TF variables in the model.
 
